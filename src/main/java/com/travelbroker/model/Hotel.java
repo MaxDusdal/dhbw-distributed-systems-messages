@@ -1,84 +1,48 @@
 package com.travelbroker.model;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.UUID;
-
 /**
- * Represents a hotel in the system
+ * Represents a hotel with a fixed number of rooms
  */
 public class Hotel implements Serializable {
     private static final long serialVersionUID = 1L;
-
-    private UUID hotelId;
-    private String name;
-    private List<Room> rooms;
-
-    public Hotel(String name, int roomCount) {
+    
+    private final String id;
+    private final String name;
+    private final int totalRooms;
+    
+    /**
+     * Creates a new hotel
+     * 
+     * @param id Unique identifier for the hotel (e.g., "H1", "H2")
+     * @param name Name of the hotel
+     * @param totalRooms Total number of rooms available
+     */
+    public Hotel(String id, String name, int totalRooms) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("Hotel ID cannot be null or empty");
+        }
         if (name == null || name.isEmpty()) {
             throw new IllegalArgumentException("Hotel name cannot be null or empty");
         }
-        if (roomCount <= 0) {
-            throw new IllegalArgumentException("Room count must be greater than 0");
+        if (totalRooms <= 0) {
+            throw new IllegalArgumentException("Total rooms must be greater than 0");
         }
-        if (roomCount > 100) {
-            throw new IllegalArgumentException("Room count must be less than 100");
-        }
-        this.hotelId = UUID.randomUUID();
+        
+        this.id = id;
         this.name = name;
-        this.rooms = new ArrayList<>();
-        generateRooms(roomCount);
+        this.totalRooms = totalRooms;
     }
-
-    private void generateRooms(int count) {
-        for (int i = 1; i <= count; i++) {
-            Room room = new Room(this.hotelId);
-            this.rooms.add(room);
-        }
+    
+    public String getId() {
+        return id;
     }
-
-    public UUID getHotelId() {
-        return hotelId;
-    }
-
-    public void setHotelId(UUID hotelId) {
-        this.hotelId = hotelId;
-    }
-
+    
     public String getName() {
         return name;
     }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public List<Room> getRooms() {
-        return rooms;
-    }
-
-    public void setRooms(List<Room> rooms) {
-        this.rooms = rooms;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        Hotel hotel = (Hotel) o;
-        return Objects.equals(hotelId, hotel.hotelId);
-    }
-
-    @Override
-    public String toString() {
-        return "Hotel{" +
-                "hotelId='" + hotelId + '\'' +
-                ", name='" + name + '\'' +
-                ", roomCount='" + (rooms != null ? rooms.size() : 0) + '\'' +
-                '}';
+    
+    public int getTotalRooms() {
+        return totalRooms;
     }
 }

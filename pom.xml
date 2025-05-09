@@ -9,9 +9,10 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>24</maven.compiler.source>
-        <maven.compiler.target>24</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <junit.version>5.10.0</junit.version>
     </properties>
 
     <dependencies>
@@ -20,6 +21,13 @@
             <groupId>org.zeromq</groupId>
             <artifactId>jeromq</artifactId>
             <version>0.5.2</version>
+        </dependency>
+
+        <!-- Gson for JSON serialization/deserialization -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.10.1</version>
         </dependency>
 
         <!-- SLF4J API for logging -->
@@ -40,7 +48,15 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.10.0</version>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JUnit Platform Launcher - for programmatic test execution -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <version>1.10.0</version>
             <scope>test</scope>
         </dependency>
 
@@ -48,12 +64,99 @@
 
     <build>
         <plugins>
+            <!-- JUnit 5 Surefire Plugin for unit tests -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.0.0</version>
+                <configuration>
+                    <!-- Exclude ZeroMQ integration tests from regular test run -->
+                    <excludes>
+                        <exclude>**/*ZeroMQIntegrationTest.java</exclude>
+                        <exclude>**/*ZeroMQFrameHandlingTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            
+            <!-- Failsafe Plugin for integration tests -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.0.0</version>
+                <configuration>
+                    <includes>
+                        <include>**/*ZeroMQIntegrationTest.java</include>
+                        <include>**/*ZeroMQFrameHandlingTest.java</include>
+                    </includes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
+    
+    <profiles>
+        <!-- Profile for running only ZeroMQ tests -->
+        <profile>
+            <id>zeromq-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <configuration>
+                            <includes>
+                                <include>**/*ZeroMQClientTest.java</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <configuration>
+                            <includes>
+                                <include>**/*ZeroMQIntegrationTest.java</include>
+                                <include>**/*ZeroMQFrameHandlingTest.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Plugin to run ZeroMQTestRunner -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>run-zeromq-tests</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>com.travelbroker.network.ZeroMQTestRunner</mainClass>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

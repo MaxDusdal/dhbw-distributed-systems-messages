@@ -1,8 +1,6 @@
 package com.travelbroker.model;
 
 import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -10,13 +8,13 @@ import java.util.UUID;
  */
 public class TripBooking implements Serializable {
     private static final long serialVersionUID = 1L;
-    
+
     private UUID bookingId;
     private HotelBooking[] hotelBookings;
     private UUID customerId;
     private BookingStatus status;
     private String statusMessage;
-    
+
     public TripBooking(HotelBooking[] hotelBookings, UUID customerId) {
         if (hotelBookings == null || hotelBookings.length == 0) {
             throw new IllegalArgumentException("Hotel bookings cannot be null or empty");
@@ -32,35 +30,35 @@ public class TripBooking implements Serializable {
         this.customerId = customerId;
         this.status = BookingStatus.PENDING;
     }
-    
+
     public UUID getBookingId() {
         return bookingId;
     }
-    
+
     public void setBookingId(UUID bookingId) {
         this.bookingId = bookingId;
     }
-    
+
     public HotelBooking[] getHotelBookings() {
         return hotelBookings;
     }
-    
+
     public void setHotelBookings(HotelBooking[] hotelBookings) {
         this.hotelBookings = hotelBookings;
     }
-    
+
     public UUID getCustomerId() {
         return customerId;
     }
-    
+
     public void setCustomerId(UUID customerId) {
         this.customerId = customerId;
     }
-    
+
     public BookingStatus getStatus() {
         return status;
     }
-    
+
     public void setStatus(BookingStatus status) {
         this.status = status;
     }
@@ -72,22 +70,4 @@ public class TripBooking implements Serializable {
     public void setStatusMessage(String statusMessage) {
         this.statusMessage = statusMessage;
     }
-    
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        TripBooking that = (TripBooking) o;
-        return Objects.equals(bookingId, that.bookingId);
-    }
-    
-    @Override
-    public String toString() {
-        return "TripBooking{" +
-                "bookingId='" + bookingId + '\'' +
-                ", hotelBookings=" + Arrays.toString(hotelBookings) +
-                ", customerId='" + customerId + '\'' +
-                ", status='" + status + '\'' +
-                '}';
-    }
-} 
+}

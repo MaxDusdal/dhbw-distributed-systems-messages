@@ -1,91 +1,73 @@
 package com.travelbroker.model;
 
 import java.io.Serializable;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Represents a hotel booking in the system
+ * Represents a booking for a specific hotel and time block
  */
 public class HotelBooking implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    private UUID hotelBookingId;
-    private UUID hotelId;
-    private int startTimeBlock;
-    private int endTimeBlock;
-    private UUID customerId;
+    private UUID bookingId;
+    private String hotelId;
+    private int timeBlock;
+    private boolean confirmed;
 
-    public HotelBooking(UUID hotelId, int startTimeBlock, int endTimeBlock, UUID customerId) {
-        if (startTimeBlock < 0 || endTimeBlock < 0 || startTimeBlock >= endTimeBlock) {
-            throw new IllegalArgumentException("Invalid time block values");
+    /**
+     * Creates a new hotel booking
+     * 
+     * @param bookingId Unique identifier for this booking
+     * @param hotelId   Identifier of the hotel (e.g., "H1", "H2")
+     * @param timeBlock Time block for the booking (week number, 1-100)
+     */
+    public HotelBooking(UUID bookingId, String hotelId, int timeBlock) {
+        if (bookingId == null) {
+            throw new IllegalArgumentException("Booking ID cannot be null");
         }
-        if (startTimeBlock > 100 || endTimeBlock > 100) {
-            throw new IllegalArgumentException("Time block values must be less than 100");
+        if (hotelId == null || hotelId.isEmpty()) {
+            throw new IllegalArgumentException("Hotel ID cannot be null or empty");
         }
-        this.hotelBookingId = UUID.randomUUID();
+        if (timeBlock < 1 || timeBlock > 100) {
+            throw new IllegalArgumentException("Time block must be between 1 and 100");
+        }
+
+        this.bookingId = bookingId;
         this.hotelId = hotelId;
-        this.startTimeBlock = startTimeBlock;
-        this.endTimeBlock = endTimeBlock;
-        this.customerId = customerId;
+        this.timeBlock = timeBlock;
+        this.confirmed = false;
     }
 
-    public UUID getHotelBookingId() {
-        return hotelBookingId;
+    public UUID getBookingId() {
+        return bookingId;
     }
 
-    public void setHotelBookingId(UUID hotelBookingId) {
-        this.hotelBookingId = hotelBookingId;
+    public void setBookingId(UUID bookingId) {
+        this.bookingId = bookingId;
     }
 
-    public UUID getHotelId() {
+    public String getHotelId() {
         return hotelId;
     }
 
-    public void setHotelId(UUID hotelId) {
+    public void setHotelId(String hotelId) {
         this.hotelId = hotelId;
     }
 
-    public int getStartTimeBlock() {
-        return startTimeBlock;
+    public int getTimeBlock() {
+        return timeBlock;
     }
 
-    public void setStartTimeBlock(int startTimeBlock) {
-        this.startTimeBlock = startTimeBlock;
+    public void setTimeBlock(int timeBlock) {
+        this.timeBlock = timeBlock;
     }
 
-    public int getEndTimeBlock() {
-        return endTimeBlock;
+    public boolean isConfirmed() {
+        return confirmed;
     }
 
-    public void setEndTimeBlock(int endTimeBlock) {
-        this.endTimeBlock = endTimeBlock;
+    public void setConfirmed(boolean confirmed) {
+        this.confirmed = confirmed;
     }
 
-    public UUID getCustomerId() {
-        return customerId;
-    }
-
-    public void setCustomerId(UUID customerId) {
-        this.customerId = customerId;
-    }
-    @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        HotelBooking that = (HotelBooking) o;
-        return Objects.equals(hotelBookingId, that.hotelBookingId);
-    }
-
-    @Override
-    public String toString() {
-        return "HotelBooking{" +
-                "hotelBookingId='" + hotelBookingId + '\'' +
-                ", hotelId='" + hotelId + '\'' +
-                ", startTimeBlock=" + startTimeBlock +
-                ", endTimeBlock=" + endTimeBlock +
-                '}';
-    }
 }

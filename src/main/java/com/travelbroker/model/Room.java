@@ -1,7 +1,6 @@
 package com.travelbroker.model;
 
 import java.io.Serializable;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -36,21 +35,5 @@ public class Room implements Serializable {
     
     public void setHotelId(UUID hotelId) {
         this.hotelId = hotelId;
-    }
-    
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Room room = (Room) o;
-        return Objects.equals(roomId, room.roomId);
-    }
-    
-    @Override
-    public String toString() {
-        return "Room{" +
-                "roomId='" + roomId + '\'' +
-                ", hotelId='" + hotelId + '\'' +
-                '}';
     }
 } 
