@@ -10,8 +10,73 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * HotelServer handles all booking operations for a specific hotel.
+ * HotelServer - Core Component of the Hotel Booking System
+ * 
+ * Architecture Overview:
+ * ---------------------
+ * The HotelServer is a central component that manages bookings for a specific hotel.
  * It uses ZeroMQ for network communication and provides thread-safe booking operations.
+ * 
+ * Key Components and Their Roles:
+ * 1. HotelServer (this class)
+ *    - Manages a single hotel's bookings
+ *    - Handles incoming booking requests via ZeroMQ
+ *    - Provides thread-safe booking operations
+ * 
+ * 2. Hotel (com.travelbroker.model.Hotel)
+ *    - Represents a hotel with its properties (ID, name, total rooms)
+ *    - Maintains a thread-safe map of booked time blocks
+ *    - Uses ConcurrentHashMap for thread-safe booking operations
+ * 
+ * 3. HotelBooking (com.travelbroker.model.HotelBooking)
+ *    - Represents a single booking with booking ID, hotel ID, and time block
+ *    - Tracks booking confirmation status
+ * 
+ * 4. BookingProcessor (com.travelbroker.booking.BookingProcessor)
+ *    - Processes incoming booking messages
+ *    - Validates booking requests
+ *    - Forwards valid requests to HotelServer
+ * 
+ * 5. BookingService (com.travelbroker.booking.BookingService)
+ *    - Client component that sends booking requests
+ *    - Communicates with HotelServer via ZeroMQ
+ *    - Handles both booking and cancellation requests
+ * 
+ * Communication Flow:
+ * ------------------
+ * 1. BookingService sends a request to HotelServer
+ * 2. HotelServer receives the request via ZeroMQ
+ * 3. BookingProcessor validates and processes the request
+ * 4. HotelServer updates the Hotel's booking state
+ * 5. HotelServer sends a response back to BookingService
+ * 
+ * Message Format:
+ * --------------
+ * Request JSON:
+ * {
+ *   "bookingId": "uuid-string",
+ *   "hotelId": "hotel-id",
+ *   "timeBlock": 1-100,
+ *   "action": "BOOK" or "CANCEL"
+ * }
+ * 
+ * Response JSON:
+ * {
+ *   "success": true/false,
+ *   "message": "status message"
+ * }
+ * 
+ * Thread Safety:
+ * -------------
+ * - Uses ConcurrentHashMap for thread-safe booking operations
+ * - Uses AtomicBoolean for atomic booking state changes
+ * - ZeroMQ socket operations are thread-safe
+ * 
+ * Dependencies:
+ * ------------
+ * - ZeroMQ (JeroMQ): For network communication
+ * - Jackson: For JSON serialization/deserialization
+ * - Java Concurrency: For thread-safe operations
  */
 public class HotelServer {
     // The hotel this server manages
