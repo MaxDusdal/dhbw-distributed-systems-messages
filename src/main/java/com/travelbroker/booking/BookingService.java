@@ -7,19 +7,14 @@ import com.travelbroker.model.Hotel;
 import com.travelbroker.model.HotelBooking;
 import com.travelbroker.model.TripBooking;
 import com.travelbroker.network.ZeroMQClient;
+import com.travelbroker.util.ConfigProvider;
 import com.travelbroker.util.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Random;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -68,7 +63,7 @@ public class BookingService implements AutoCloseable {
         
         this.client = new ZeroMQClient(brokerEndpoint, SocketType.DEALER);
         
-        this.config = loadConfiguration();
+        this.config = ConfigProvider.loadConfiguration();
         
         int totalRequestsPerMinute = Integer.parseInt(config.getProperty("BOOKING_REQUEST_ARRIVAL_RATE", "100"));
         this.requestsPerMinute = totalRequestsPerMinute / totalInstances;
@@ -296,28 +291,6 @@ public class BookingService implements AutoCloseable {
         public void setStatus(String status) {
             this.status = status;
         }
-    }
-    
-    /**
-     * Loads the configuration from the properties file.
-     *
-     * @return The loaded properties
-     */
-    private Properties loadConfiguration() {
-        Properties properties = new Properties();
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (input == null) {
-                logger.error("Unable to find {}", CONFIG_FILE);
-                return properties;
-            }
-            
-            properties.load(input);
-            logger.debug("Loaded configuration: {}", properties);
-        } catch (IOException e) {
-            logger.error("Error loading configuration: {}", e.getMessage(), e);
-        }
-        
-        return properties;
     }
     
     @Override
