@@ -93,6 +93,7 @@ public class TravelBroker implements AutoCloseable {
             bookingServiceSocket.listenForResponses(this::handleIncomingMessage);
             hotelDealerSocket.setMessageHandler(this::handleHotelResponse);
             hotelDealerSocket.addEndpoints(hotelEndpoints);
+            hotelDealerSocket.start();
 
             timeoutScheduler.scheduleAtFixedRate(
                     this::checkForTimeouts,
@@ -129,6 +130,7 @@ public class TravelBroker implements AutoCloseable {
         }
 
         timeoutScheduler.shutdownNow();
+        hotelDealerSocket.stop();
         
         logger.info("TravelBroker stopped");
     }
