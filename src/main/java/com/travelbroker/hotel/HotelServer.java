@@ -10,16 +10,26 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Handles booking operations for a specific hotel.
- * Listens for booking requests via ZeroMQ and processes them.
+ * HotelServer handles all booking operations for a specific hotel.
+ * It uses ZeroMQ for network communication and provides thread-safe booking operations.
  */
 public class HotelServer {
+    // The hotel this server manages
     private final Hotel hotel;
+    // ZeroMQ context for managing network resources
     private final ZContext context;
+    // ZeroMQ socket for handling requests
     private final ZMQ.Socket socket;
+    // JSON mapper for serializing/deserializing messages
     private final ObjectMapper objectMapper;
+    // Flag to control server lifecycle
     private boolean running;
 
+    /**
+     * Creates a new HotelServer for the specified hotel.
+     * @param hotel The hotel to manage bookings for
+     * @param bindAddress The ZeroMQ address to bind to (e.g., "tcp://localhost:5555")
+     */
     public HotelServer(Hotel hotel, String bindAddress) {
         if (hotel == null) {
             throw new IllegalArgumentException("Hotel cannot be null");
@@ -34,6 +44,7 @@ public class HotelServer {
 
     /**
      * Starts the server to listen for booking requests.
+     * This method runs in a loop until stop() is called.
      */
     public void start() {
         running = true;
@@ -58,7 +69,7 @@ public class HotelServer {
     }
 
     /**
-     * Stops the server.
+     * Stops the server and releases network resources.
      */
     public void stop() {
         running = false;
@@ -68,6 +79,8 @@ public class HotelServer {
 
     /**
      * Processes an incoming request and returns a response.
+     * @param request The JSON request string
+     * @return JSON response string
      */
     private String processRequest(String request) {
         try {
@@ -79,7 +92,7 @@ public class HotelServer {
                 return createResponse(false, "Hotel ID mismatch");
             }
 
-            // Process the booking
+            // Process the booking based on action type
             if (bookingRequest.getAction().equals("BOOK")) {
                 boolean success = processBooking(new HotelBooking(
                     UUID.fromString(bookingRequest.getBookingId()),
@@ -102,6 +115,9 @@ public class HotelServer {
         }
     }
 
+    /**
+     * Creates a JSON response with success status and message.
+     */
     private String createResponse(boolean success, String message) {
         try {
             BookingResponse response = new BookingResponse(success, message);
@@ -113,7 +129,6 @@ public class HotelServer {
 
     /**
      * Processes a hotel booking request.
-     *
      * @param booking The booking request to process
      * @return true if the booking was successful, false if already booked
      */
@@ -158,7 +173,6 @@ public class HotelServer {
 
     /**
      * Cancels a booking for the specified time block.
-     *
      * @param booking The booking to cancel
      * @return true if the cancellation was successful, false if not booked
      */
@@ -194,7 +208,6 @@ public class HotelServer {
 
     /**
      * Checks if a time block is booked.
-     *
      * @param timeBlock The time block to check (1-100)
      * @return true if the time block is booked, false otherwise
      */
@@ -206,12 +219,12 @@ public class HotelServer {
      * Inner class for request deserialization
      */
     private static class BookingRequest {
-        private String bookingId;
-        private String hotelId;
-        private int timeBlock;
-        private String action;
+        private String bookingId;    // Unique identifier for the booking
+        private String hotelId;      // ID of the hotel to book
+        private int timeBlock;       // Time block to book (1-100)
+        private String action;       // Action type (BOOK or CANCEL)
 
-        // Getters and setters
+        // Getters and setters for JSON serialization
         public String getBookingId() { return bookingId; }
         public void setBookingId(String bookingId) { this.bookingId = bookingId; }
         public String getHotelId() { return hotelId; }
@@ -226,15 +239,15 @@ public class HotelServer {
      * Inner class for response serialization
      */
     private static class BookingResponse {
-        private boolean success;
-        private String message;
+        private boolean success;     // Whether the operation was successful
+        private String message;      // Description of the result
 
         public BookingResponse(boolean success, String message) {
             this.success = success;
             this.message = message;
         }
 
-        // Getters and setters
+        // Getters and setters for JSON serialization
         public boolean isSuccess() { return success; }
         public void setSuccess(boolean success) { this.success = success; }
         public String getMessage() { return message; }
