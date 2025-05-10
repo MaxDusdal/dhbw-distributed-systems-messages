@@ -13,14 +13,15 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.0</junit.version>
+        <jackson.version>2.15.2</jackson.version>
     </properties>
 
     <dependencies>
-        <!-- ZeroMQ communication using JeroMQ -->
+        <!-- ZeroMQ -->
         <dependency>
             <groupId>org.zeromq</groupId>
             <artifactId>jeromq</artifactId>
-            <version>0.5.2</version>
+            <version>0.5.4</version>
         </dependency>
 
         <!-- Gson for JSON serialization/deserialization -->
@@ -58,6 +59,13 @@
             <artifactId>junit-platform-launcher</artifactId>
             <version>1.10.0</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- Jackson for JSON processing -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
         </dependency>
 
     </dependencies>
