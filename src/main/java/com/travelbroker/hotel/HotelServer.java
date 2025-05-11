@@ -1,5 +1,19 @@
 package com.travelbroker.hotel;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.zeromq.SocketType;
+
 import com.travelbroker.broker.TravelBroker;
 import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.dto.HotelResponse;
@@ -9,21 +23,15 @@ import com.travelbroker.network.ZeroMQClient;
 import com.travelbroker.util.ConfigProvider;
 import com.travelbroker.util.JsonUtil;
 import com.travelbroker.util.Simulation;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.zeromq.SocketType;
-
-import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 // The HotelServer class represents a server for a single hotel.
 public final class HotelServer implements AutoCloseable {
     // Configuration property names for simulation parameters
-    private static final String CONFIG_AVERAGE_PROCESSING_TIME = "AVERAGE_PROCESSING_TIME";  // Average processing time
-    private static final String CONFIG_FAILURE_PROBABILITY = "BOOKING_FAILURE_PROBABILITY";  // Probability that bookings fail
-    private static final String CONFIG_LOSS_PROBABILITY = "MESSAGE_LOSS_PROBABILITY";        // Probability that messages are lost
-
+    private static final String CONFIG_AVERAGE_PROCESSING_TIME = "AVERAGE_PROCESSING_TIME"; // Average processing time
+    private static final String CONFIG_FAILURE_PROBABILITY = "BOOKING_FAILURE_PROBABILITY"; // Probability that bookings
+                                                                                            // fail
+    private static final String CONFIG_LOSS_PROBABILITY = "MESSAGE_LOSS_PROBABILITY"; // Probability that messages are
+                                                                                      // lost
 
     private static final Logger logger = LoggerFactory.getLogger(HotelServer.class);
 
@@ -61,13 +69,15 @@ public final class HotelServer implements AutoCloseable {
         // Sends a READY message to the broker with this hotel's ID
         backend.sendRequest("READY:" + hotel.getId()); // tell broker that system is idle
 
-        // Starts listening for incoming messages and handles them with the handleMessage method
+        // Starts listening for incoming messages and handles them with the
+        // handleMessage method
         backend.listenForResponses(this::handleMessage);
     }
 
     // Handles incoming messages from the broker
     private void handleMessage(String json) {
-        // Submits the message handling task to the thread pool to not block the network thread
+        // Submits the message handling task to the thread pool to not block the network
+        // thread
         pool.submit(() -> {
             // Parses the JSON string into a HotelRequest object
             HotelRequest request = JsonUtil.fromJson(json, HotelRequest.class);
@@ -75,21 +85,24 @@ public final class HotelServer implements AutoCloseable {
 
             // Processes the request based on its action type (BOOK or CANCEL)
             switch (request.getAction()) {
-                case BOOK -> response = tryBook(request);       // Tries to book a room
-                case CANCEL -> response = tryCancel(request);   // Tries to cancel a booking
-                default -> response = new HotelResponse(        // Unknown action
+                case BOOK -> response = tryBook(request); // Tries to book a room
+                case CANCEL -> response = tryCancel(request); // Tries to cancel a booking
+                default -> response = new HotelResponse( // Unknown action
                         request.getRequestID(), false,
                         "Unknown action: " + request.getAction());
             }
 
             // Simulates message loss based on configured probability
             // This is for simulating network failures for testing
-            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_LOSS_PROBABILITY, "0.0")))) {
-                logger.info("Simulated message loss for {} of booking {}", request.getAction(), request.getRequestID());
+            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_LOSS_PROBABILITY,
+                    "0.0")))) {
+                logger.info("Simulated message loss for {} of booking {}",
+                        request.getAction(), request.getBooking().getBookingId());
                 return; // Message is intentionally dropped, no response is sent
             }
 
             // Sends the response back to the broker
+
             backend.sendRequest(JsonUtil.toJson(response));
         });
     }
@@ -153,13 +166,13 @@ public final class HotelServer implements AutoCloseable {
 
             // Checks if the time block exists
             if (list == null) {
-                return new HotelResponse(request.getRequestID(), false,
+                return new HotelResponse(request.getRequestID(), true,
                         "No time block to cancel");
             }
 
             // Checks if the booking exists
             if (!list.contains(request.getRequestID())) {
-                return new HotelResponse(request.getRequestID(), false, "No booking to cancel");
+                return new HotelResponse(request.getRequestID(), true, "No booking to cancel");
             }
 
             // Removes the booking from the list

@@ -29,8 +29,8 @@ public final class TravelBroker implements AutoCloseable {
     private static final long BOOKING_TIMEOUT_MS = 30_000;
     private static final long TIMEOUT_SWEEP_MS = 5_000;
     // Worker (hotel) registration
-    private final Map<String, String> hotelToWorker = new ConcurrentHashMap<>(); // TODO: Change data type to UUID
-    private final Map<String, String> workerToHotel = new ConcurrentHashMap<>(); // inverse map for fast lookup
+    private final Map<String, String> hotelToWorker = new ConcurrentHashMap<>();
+    private final Map<String, String> workerToHotel = new ConcurrentHashMap<>();
     /**
      * bookingId → aggregate state
      */
@@ -149,7 +149,6 @@ public final class TravelBroker implements AutoCloseable {
     }
 
     private void onBackEndMessage(String frame) {
-        logger.error(frame);
         // frame = workerId \0\0 payload
         String[] parts = frame.split("\0\0", 2);
         if (parts.length != 2) {
@@ -168,10 +167,15 @@ public final class TravelBroker implements AutoCloseable {
             return;
         }
 
-        // normal HotelResponse
-        HotelResponse hotelResponse = JsonUtil.fromJson(payload, HotelResponse.class);
+        HotelResponse hotelResponse = null;
+        try {
+            // normal HotelResponse
+            hotelResponse = JsonUtil.fromJson(payload, HotelResponse.class);
+        } catch (Exception e) {
+            return;
+        }
+
         if (hotelResponse == null || hotelResponse.getRequestId() == null) {
-            logger.error("Invalid HotelResponse {}", payload);
             return;
         }
 
@@ -184,7 +188,6 @@ public final class TravelBroker implements AutoCloseable {
         UUID bookingId = findBookingIdByRequestId(hotelResponse.getRequestId());
 
         if (bookingId == null) {
-            logger.warn("Orphan response for request {}", hotelResponse.getRequestId());
             return;
         }
 
@@ -200,13 +203,27 @@ public final class TravelBroker implements AutoCloseable {
         // Check if all hotels have responded
         if (pendingBooking.allBookingsAnswered()) {
             logger.info("All hotels have responded for booking {}", bookingId);
-            finalizeBooking(pendingBooking);
+            
+            // Handle based on current booking status
+            if (pendingBooking.status == BookingStatus.ROLLING_BACK) {
+                synchronized (pendingBooking) {
+                    if (pendingBooking.allBookingsSuccessful()) {
+                        logger.info("All rollbacks successful for booking {}", bookingId);
+                        pendingBooking.setStatus(BookingStatus.ROLLBACK_SUCCESS);
+                        replyToClient(pendingBooking, "All hotel bookings rolled back successfully");
+                        pendingBookings.remove(bookingId);
+                    }
+                    // If not all rollbacks are successful, the scheduled retry will handle it
+                }
+            } else {
+                finalizeBooking(pendingBooking);
+            }
         }
     }
 
     private void finalizeBooking(PendingBooking pb) {
         if (!pb.allBookingsSuccessful()) {
-            initiateRollback(pb);
+            initiateRollback(pb, "One or more hotel bookings failed");
             return;
         }
         pb.setStatus(BookingStatus.CONFIRMED);
@@ -218,40 +235,84 @@ public final class TravelBroker implements AutoCloseable {
         long now = System.currentTimeMillis();
         for (PendingBooking pb : List.copyOf(pendingBookings.values())) {
             if (now - pb.createdAt > BOOKING_TIMEOUT_MS && !pb.allBookingsAnswered()) {
-                initiateRollback(pb);
+                initiateRollback(pb, "Timeout waiting for hotel replies");
             }
         }
     }
 
-    private void initiateRollback(PendingBooking pb) {
+    private void initiateRollback(PendingBooking pb, String reason) {
         pb.setStatus(BookingStatus.FAILED);
-        replyToClient(pb, "Timeout waiting for hotel replies");
+        replyToClient(pb, reason);
         pb.setStatus(BookingStatus.ROLLING_BACK);
-        rollbackHotelBookings(pb);
+        
+        // Execute rollback asynchronously
+        processor.submit(() -> rollbackHotelBookings(pb));
     }
 
     private void rollbackHotelBookings(PendingBooking pb) {
-        int CANCELLATION_RETRIES = 5;
-
-        for (int i = 0; i < CANCELLATION_RETRIES; i++) {
-            cancelHotelBookings(pb);
-            try {
-                long BACKOFF_BASE_MS = 1000;
-                int sleepMs = (int) Math.min(BOOKING_TIMEOUT_MS, BACKOFF_BASE_MS * Math.pow(2, i + 1));
-                Thread.sleep(sleepMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+        // Start rollback attempts with attempt counter
+        scheduleRollbackAttempt(pb, 0);
+    }
+    
+    private void scheduleRollbackAttempt(PendingBooking pb, int attemptCount) {
+        final int MAX_CANCELLATION_RETRIES = 5;
+        
+        // If booking is no longer in pendingBookings (already completed), don't proceed
+        if (!pendingBookings.containsKey(pb.bookingId)) {
+            logger.info("Skipping rollback attempt for booking {} as it's no longer pending", pb.bookingId);
+            return;
+        }
+        
+        if (attemptCount >= MAX_CANCELLATION_RETRIES) {
+            logger.error("Failed to roll back all hotel bookings for {} after {} attempts", 
+                    pb.bookingId, MAX_CANCELLATION_RETRIES);
+            
+            synchronized (pb) {
+                if (pendingBookings.containsKey(pb.bookingId)) {
+                    pb.setStatus(BookingStatus.ROLLBACK_TIMEOUT);
+                    replyToClient(pb, "Failed to roll back all hotel bookings");
+                    pendingBookings.remove(pb.bookingId);
+                }
             }
-            if (pb.allBookingsSuccessful()) {
+            return;
+        }
+        
+        logger.info("Attempting to roll back hotel bookings for booking {}, attempt {}", 
+                pb.bookingId, attemptCount + 1);
+        
+        // Only send cancel requests for bookings that haven't successfully been cancelled yet
+        synchronized (pb) {
+            if (!pendingBookings.containsKey(pb.bookingId)) {
+                return; // Another thread might have completed the rollback
+            }
+            cancelHotelBookings(pb);
+        }
+        
+        // Check if rollback completed successfully immediately (happens if all hotels were already rolled back)
+        boolean isRollbackComplete = false;
+        synchronized (pb) {
+            if (pendingBookings.containsKey(pb.bookingId) && 
+                    (pb.hotelRequests.isEmpty() || pb.allBookingsSuccessful())) {
+                logger.info("All hotel bookings for {} have been rolled back successfully", pb.bookingId);
                 pb.setStatus(BookingStatus.ROLLBACK_SUCCESS);
                 replyToClient(pb, "All hotel bookings rolled back successfully");
                 pendingBookings.remove(pb.bookingId);
-                return;
+                isRollbackComplete = true;
             }
         }
-        pb.setStatus(BookingStatus.ROLLBACK_TIMEOUT);
-        replyToClient(pb, "Failed to roll back all hotel bookings");
-        pendingBookings.remove(pb.bookingId);
+        
+        if (isRollbackComplete) {
+            return;
+        }
+        
+        // Schedule next attempt with exponential backoff if the booking is still pending
+        if (pendingBookings.containsKey(pb.bookingId)) {
+            long BACKOFF_BASE_MS = 1000;
+            long delayMs = Math.min(BOOKING_TIMEOUT_MS, BACKOFF_BASE_MS * (long)Math.pow(2, attemptCount + 1));
+            
+            timeoutSweep.schedule(() -> scheduleRollbackAttempt(pb, attemptCount + 1), 
+                    delayMs, TimeUnit.MILLISECONDS);
+        }
     }
 
     private void cancelHotelBookings(PendingBooking pb) {
@@ -288,30 +349,44 @@ public final class TravelBroker implements AutoCloseable {
     private static final class PendingBooking {
         private final String clientId;
         private final UUID bookingId;
-        private final long createdAt = System.currentTimeMillis();
-        private final Map<UUID, HotelRequest> hotelRequests = new HashMap<>();
+        private final long createdAt;
+        private final Map<UUID, HotelRequest> hotelRequests = new ConcurrentHashMap<>();
         private volatile BookingStatus status = BookingStatus.PENDING;
 
         PendingBooking(String clientId, BookingRequest req) {
             this.clientId = clientId;
             this.bookingId = req.getBookingId();
+            this.createdAt = System.currentTimeMillis();
         }
 
-        void registerRequest(HotelRequest hr) {
+        synchronized void registerRequest(HotelRequest hr) {
             hotelRequests.put(hr.getRequestID(), hr);
         }
 
-        void recordBookingResult(UUID requestId, boolean ok) {
+        synchronized void recordBookingResult(UUID requestId, boolean ok) {
             HotelRequest hr = hotelRequests.get(requestId);
+            if (hr == null) {
+                return; // Protect against null pointer
+            }
             hr.successful = ok;
             hr.answered = true;
         }
 
-        boolean allBookingsAnswered() {
+        synchronized boolean allBookingsAnswered() {
             return hotelRequests.values().stream().allMatch(hr -> hr.answered);
         }
 
-        boolean allBookingsSuccessful() {
+        synchronized boolean allBookingsSuccessful() {
+            // When in ROLLING_BACK state, we need different success criteria
+            if (status == BookingStatus.ROLLING_BACK) {
+                // During rollback, an empty map (all requests successfully removed)
+                // or all answered requests marked as successful means success
+                return hotelRequests.isEmpty() || 
+                       hotelRequests.values().stream()
+                           .filter(hr -> hr.answered)
+                           .allMatch(hr -> hr.successful);
+            }
+            // Normal booking success case - all must be successful
             return hotelRequests.values().stream().allMatch(hr -> hr.successful);
         }
 
@@ -319,12 +394,30 @@ public final class TravelBroker implements AutoCloseable {
             this.status = st;
         }
 
-        Map<UUID, HotelRequest> getRequestResults() {
-            return hotelRequests;
+        synchronized Map<UUID, HotelRequest> getRequestResults() {
+            // Return a copy to prevent concurrent modification
+            return new HashMap<>(hotelRequests);
         }
 
-        void removeConsistentBookings() {
-            hotelRequests.entrySet().removeIf(entry -> entry.getValue().answered && entry.getValue().successful);
+        synchronized void removeConsistentBookings() {
+            // During rollback, we only want to remove bookings that have been successfully cancelled
+            if (status == BookingStatus.ROLLING_BACK) {
+                logger.debug("Removing {} successfully cancelled bookings in rollback for {}", 
+                    hotelRequests.values().stream()
+                        .filter(hr -> hr.answered && hr.successful && hr.getAction() == HotelAction.CANCEL)
+                        .count(),
+                    bookingId);
+                
+                hotelRequests.entrySet().removeIf(entry -> 
+                    entry.getValue().answered && 
+                    entry.getValue().successful && 
+                    entry.getValue().getAction() == HotelAction.CANCEL);
+            } else {
+                // During normal operation, remove successful bookings so we don't try to cancel them
+                hotelRequests.entrySet().removeIf(entry -> 
+                    entry.getValue().answered && 
+                    entry.getValue().successful);
+            }
         }
     }
 }
