@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -20,7 +21,7 @@ import java.util.concurrent.*;
 /**
  * TravelBroker: accepts trip-booking requests from BookingServices (front-end)
  * and forwards individual hotel requests to the corresponding HotelServer
- * instance (back-end).  One HotelServer process == one hotel.
+ * instance (back-end). One HotelServer process == one hotel.
  */
 public final class TravelBroker implements AutoCloseable {
 
@@ -38,8 +39,7 @@ public final class TravelBroker implements AutoCloseable {
      */
     private final Map<UUID, PendingBooking> pendingBookings = new ConcurrentHashMap<>();
     private final ExecutorService processor = Executors.newFixedThreadPool(10);
-    private final ScheduledExecutorService timeoutSweep =
-            Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService timeoutSweep = Executors.newSingleThreadScheduledExecutor();
     private String frontendEndpoint = "tcp://*:5555"; // client side
     private final ZeroMQClient frontEnd = new ZeroMQClient(frontendEndpoint, SocketType.ROUTER);
     private String backendEndpoint = "tcp://*:5556"; // hotel side
@@ -71,7 +71,8 @@ public final class TravelBroker implements AutoCloseable {
     }
 
     public void start() {
-        if (running) return;
+        if (running)
+            return;
         running = true;
 
         frontEnd.bind();
@@ -90,7 +91,8 @@ public final class TravelBroker implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!running) return;
+        if (!running)
+            return;
         running = false;
         shutdown(processor);
         shutdown(timeoutSweep);
@@ -138,14 +140,15 @@ public final class TravelBroker implements AutoCloseable {
             String hotelId = hr.getBooking().getHotelId();
             String workerId = hotelToWorker.get(hotelId);
             pendingBooking.registerRequest(hr.getRequestID()); // Tracks request using unique id
-
             String payload = JsonUtil.toJson(hr);
-            String message = workerId + "\0\0" + payload;  // ROUTER envelope
-            backEnd.sendRequest(message);
-            logger.debug("Sent request to hotel {} via worker {}", hotelId, workerId);
+            String message = workerId + "\0\0" + payload; // ROUTER envelope
+            boolean sent = backEnd.sendRequest(message);
+            if (!sent) {
+                logger.error("Failed to send request to hotel {} via worker {}", hotelId, workerId);
+            } else {
+                logger.info("Sent request to hotel {} via worker {}", hotelId, workerId);
+            }
         }
-
-        finalizeBooking(pendingBooking);
     }
 
     private void onBackEndMessage(String frame) {
@@ -164,12 +167,11 @@ public final class TravelBroker implements AutoCloseable {
             String hotelId = payload.substring("READY:".length());
             hotelToWorker.put(hotelId, workerId);
             workerToHotel.put(workerId, hotelId);
-            logger.info("Registered HotelServer {} → workerId {}", hotelId, workerId);
+            logger.debug("Registered HotelServer {} → workerId {}", hotelId, workerId);
             return;
         }
 
         // normal HotelResponse
-        logger.error("Received response from worker {}: {}", workerId, payload);
         HotelResponse hotelResponse = JsonUtil.fromJson(payload, HotelResponse.class);
         if (hotelResponse == null || hotelResponse.getRequestId() == null) {
             logger.error("Invalid HotelResponse {}", payload);
@@ -182,18 +184,31 @@ public final class TravelBroker implements AutoCloseable {
             return;
         }
 
-        PendingBooking pendingBooking = pendingBookings.get(hotelResponse.getRequestId());
-        if (pendingBooking == null) {
-            logger.warn("Orphan response for booking {}", hotelResponse.getRequestId());
+        UUID bookingId = findBookingIdByRequestId(hotelResponse.getRequestId());
+
+        if (bookingId == null) {
+            logger.warn("Orphan response for request {}", hotelResponse.getRequestId());
             return;
         }
 
-        //pendingBooking.recordHotelResult(hotelId, hotelResponse.isSuccess());
-        //if (pendingBooking.allHotelsAnswered()) finalizeBooking(pendingBooking);
+        PendingBooking pendingBooking = pendingBookings.get(bookingId);
+        if (pendingBooking == null) {
+            logger.warn("Booking {} was found by request ID but is no longer in pendingBookings", bookingId);
+            return;
+        }
+
+        // Record the result
+        pendingBooking.recordBookingResult(hotelResponse.getRequestId(), hotelResponse.isSuccess());
+
+        // Check if all hotels have responded
+        if (pendingBooking.allBookingsAnswered()) {
+            logger.info("All hotels have responded for booking {}", bookingId);
+            finalizeBooking(pendingBooking);
+        }
     }
 
     private void finalizeBooking(PendingBooking pb) {
-        if (true) { // pb.allHotelsSuccessful()
+        if (pb.allBookingsSuccessful()) {
             pb.setStatus(BookingStatus.CONFIRMED);
             replyToClient(pb, "All hotel bookings confirmed");
         } else {
@@ -206,7 +221,7 @@ public final class TravelBroker implements AutoCloseable {
     private void sweepForTimeouts() {
         long now = System.currentTimeMillis();
         for (PendingBooking pb : List.copyOf(pendingBookings.values())) {
-            if (now - pb.createdAt > BOOKING_TIMEOUT_MS ) { // !pb.allHotelsAnswered()
+            if (now - pb.createdAt > BOOKING_TIMEOUT_MS && !pb.allBookingsAnswered()) {
                 pb.setStatus(BookingStatus.FAILED);
                 replyToClient(pb, "Timeout waiting for hotel replies");
                 pendingBookings.remove(pb.bookingId);
@@ -218,15 +233,23 @@ public final class TravelBroker implements AutoCloseable {
         BookingResponse resp = new BookingResponse(pb.bookingId, pb.status.name(), msg);
         String frame = pb.clientId + "\0\0" + JsonUtil.toJson(resp);
         frontEnd.sendRequest(frame);
-        logger.info("Sent {} to client {} (booking {})",
+        logger.debug("Sent {} to client {} (booking {})",
                 pb.status, pb.clientId, pb.bookingId);
+    }
+
+    private UUID findBookingIdByRequestId(UUID requestId) {
+        return pendingBookings.entrySet().stream()
+                .filter(entry -> entry.getValue().requestResults.containsKey(requestId))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(null);
     }
 
     private static final class PendingBooking {
         private final String clientId;
         private final UUID bookingId;
         private final long createdAt = System.currentTimeMillis();
-        private final Map<UUID, Boolean> requestResults = new ConcurrentHashMap<>();
+        private final Map<UUID, Boolean> requestResults = new HashMap<>();
         private volatile BookingStatus status = BookingStatus.PENDING;
 
         PendingBooking(String clientId, BookingRequest req) {
@@ -235,6 +258,8 @@ public final class TravelBroker implements AutoCloseable {
         }
 
         void registerRequest(UUID requestId) {
+            // ERROR: requestResults.put(requestId, null); -> causes a null pointer
+            // exception
             requestResults.put(requestId, null);
         }
 
@@ -253,5 +278,6 @@ public final class TravelBroker implements AutoCloseable {
         void setStatus(BookingStatus st) {
             this.status = st;
         }
+
     }
 }

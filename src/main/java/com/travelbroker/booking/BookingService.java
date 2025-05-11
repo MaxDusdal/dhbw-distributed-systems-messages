@@ -37,14 +37,14 @@ public final class BookingService implements AutoCloseable {
     private final List<Hotel> hotels;
     private final Map<UUID, PendingRequest> pending = new ConcurrentHashMap<>();
 
-    private final int rpm;      // requests per minute for THIS instance
+    private final int rpm; // requests per minute for THIS instance
     private final long interval; // milliseconds between requests
 
     private volatile boolean running;
 
     public BookingService(TravelBroker broker,
-                          int totalInstances,
-                          List<Hotel> availableHotels) {
+            int totalInstances,
+            List<Hotel> availableHotels) {
 
         Objects.requireNonNull(broker, "broker");
         Objects.requireNonNull(availableHotels, "availableHotels");
@@ -84,7 +84,8 @@ public final class BookingService implements AutoCloseable {
     private static void shutdownExecutor(ExecutorService ex, long timeout, TimeUnit unit) {
         ex.shutdown();
         try {
-            if (!ex.awaitTermination(timeout, unit)) ex.shutdownNow();
+            if (!ex.awaitTermination(timeout, unit))
+                ex.shutdownNow();
         } catch (InterruptedException ie) {
             ex.shutdownNow();
             Thread.currentThread().interrupt();
@@ -92,7 +93,8 @@ public final class BookingService implements AutoCloseable {
     }
 
     public void start() {
-        if (running) return;
+        if (running)
+            return;
         running = true;
 
         client.connect();
@@ -105,7 +107,8 @@ public final class BookingService implements AutoCloseable {
     }
 
     public void stop() {
-        if (!running) return;
+        if (!running)
+            return;
         running = false;
         shutdownExecutor(scheduler, 5, TimeUnit.SECONDS);
         logger.info("BookingService#{} stopped", instanceId);
@@ -145,7 +148,7 @@ public final class BookingService implements AutoCloseable {
 
             pendingRequest.complete(response.getStatus());
             long rtt = pendingRequest.responseTime() - pendingRequest.requestTime();
-            logger.info("BookingService#{} finished {} status={} msg='{}' in {} ms",
+            logger.info("\u001B[32m BookingService#{} finished {} status={} msg='{}' in {} ms \u001B[0m",
                     instanceId, response.getBookingId(), response.getStatus(),
                     response.getMessage(), rtt);
 
@@ -159,15 +162,16 @@ public final class BookingService implements AutoCloseable {
         int segments = ThreadLocalRandom.current().nextInt(1, 6);
         HotelBooking[] bookings = new HotelBooking[segments];
 
-        int timeBlock = ThreadLocalRandom.current().nextInt(1, MAX_TIME_BLOCK - segments + 1); // Ensure all segments lie within the max time block
+        int timeBlock = ThreadLocalRandom.current().nextInt(1, MAX_TIME_BLOCK - segments + 1); // Ensure all segments
+                                                                                               // lie within the max
+                                                                                               // time block
         Hotel prev = null;
 
         for (int i = 0; i < segments; i++) {
             Hotel h;
             do {
                 h = hotels.get(ThreadLocalRandom.current().nextInt(hotels.size()));
-            }
-            while (h.equals(prev));          // avoid consecutive identical hotels
+            } while (h.equals(prev)); // avoid consecutive identical hotels
             prev = h;
 
             bookings[i] = new HotelBooking(UUID.randomUUID(), h.getId(), timeBlock++);
@@ -182,9 +186,9 @@ public final class BookingService implements AutoCloseable {
     }
 
     private record PendingRequest(TripBooking trip,
-                                  long requestTime,
-                                  String status,
-                                  long responseTime) {
+            long requestTime,
+            String status,
+            long responseTime) {
 
         PendingRequest(TripBooking trip) {
             this(trip, System.currentTimeMillis(), null, 0);

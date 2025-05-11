@@ -80,14 +80,17 @@ public final class HotelServer implements AutoCloseable {
         synchronized (this) {
             List<UUID> list = bookings.computeIfAbsent(booking.getTimeBlock(), k -> new ArrayList<>());
 
-            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
-                return new HotelResponse(request.getRequestID(), false, "Simulated internal failure");
+            if (Simulation
+                    .artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
+                return new HotelResponse(request.getRequestID(), false,
+                        "Simulated internal failure");
             }
             if (list.size() >= hotel.getTotalRooms()) {
                 return new HotelResponse(request.getRequestID(), false, "No rooms available");
             }
             if (list.contains(request.getRequestID())) {
-                return new HotelResponse(request.getRequestID(), false, "Booking already exists");
+                return new HotelResponse(request.getRequestID(), false,
+                        "Booking already exists");
             }
 
             list.add(request.getRequestID());
@@ -102,7 +105,8 @@ public final class HotelServer implements AutoCloseable {
         synchronized (this) {
             List<UUID> list = bookings.get(booking.getTimeBlock());
             if (list == null) {
-                return new HotelResponse(request.getRequestID(), false, "No time block to cancel");
+                return new HotelResponse(request.getRequestID(), false,
+                        "No time block to cancel");
             }
             if (!list.contains(request.getRequestID())) {
                 return new HotelResponse(request.getRequestID(), false, "No booking to cancel");
