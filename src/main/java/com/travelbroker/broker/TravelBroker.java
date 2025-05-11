@@ -145,6 +145,7 @@ public final class TravelBroker implements AutoCloseable {
         }
 
         // normal HotelResponse
+        logger.error("Received response from worker {}: {}", workerId, payload);
         HotelResponse hotelResponse = JsonUtil.fromJson(payload, HotelResponse.class);
         if (hotelResponse == null || hotelResponse.getBookingId() == null) {
             logger.error("Invalid HotelResponse {}", payload);

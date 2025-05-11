@@ -46,10 +46,8 @@ public final class Main {
             logger.info("System running – press ENTER to quit.");
             waitForEnter();                                     // block here
 
-            // ── graceful shutdown (reverse order) ─────────────
             bookingServices.forEach(Main::closeQuietly);
             hotelServers.forEach(Main::closeQuietly);
-
         } catch (Exception ex) {
             logger.error("Fatal error in Main", ex);
         }
@@ -57,15 +55,14 @@ public final class Main {
         logger.info("System shutdown complete");
     }
 
-    // ── helpers ──────────────────────────────────────────────────────
-    private static int parseInstanceCount(String[] args, int defaultVal) {
-        if (args.length == 0) return defaultVal;
+    private static int parseInstanceCount(String[] args, int defaultValue) {
+        if (args.length == 0) return defaultValue;
         try {
             int val = Integer.parseInt(args[0]);
-            return val > 0 ? val : defaultVal;
+            return val > 0 ? val : defaultValue;
         } catch (NumberFormatException nfe) {
-            logger.warn("Invalid instance count argument '{}', using default {}", args[0], defaultVal);
-            return defaultVal;
+            logger.warn("Invalid instance count argument '{}', using default {}", args[0], defaultValue);
+            return defaultValue;
         }
     }
 
@@ -83,11 +80,11 @@ public final class Main {
 
     private static List<HotelServer> startHotelServers(List<Hotel> hotels) {
         List<HotelServer> servers = new ArrayList<>(hotels.size());
-        for (Hotel h : hotels) {
+        for (Hotel hotel : hotels) {
             String backendConnectAddress = TravelBroker.getBackendEndpoint();
-            HotelServer server = new HotelServer(h, backendConnectAddress);
+            HotelServer server = new HotelServer(hotel);
             servers.add(server);
-            logger.info("Started HotelServer for {} on {}", h.getId(), backendConnectAddress);
+            logger.info("Started HotelServer for {} on {}", hotel.getId(), backendConnectAddress);
         }
         return servers;
     }

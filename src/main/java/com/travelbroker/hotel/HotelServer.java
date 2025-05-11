@@ -1,5 +1,6 @@
 package com.travelbroker.hotel;
 
+import com.travelbroker.broker.TravelBroker;
 import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.dto.HotelResponse;
 import com.travelbroker.model.Hotel;
@@ -37,24 +38,17 @@ public final class HotelServer implements AutoCloseable {
      */
     private final ExecutorService pool;
 
-    public HotelServer(Hotel hotel, String backendEndpoint) {
+    public HotelServer(Hotel hotel) {
         this.hotel = Objects.requireNonNull(hotel);
         this.config = ConfigProvider.loadConfiguration();
 
         pool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("business-", 0).factory());
 
-        backend = new ZeroMQClient(backendEndpoint, SocketType.DEALER);
+        backend = new ZeroMQClient(TravelBroker.getBackendEndpoint(), SocketType.DEALER);
         backend.connect();
         backend.sendRequest("READY:" + hotel.getId()); // tell broker that system is idle
 
         backend.listenForResponses(this::handleMessage);
-    }
-
-    public static void main(String[] args) throws Exception {
-        Hotel demo = new Hotel("DemoHotel", "DemoHotel", 10);
-        try (HotelServer ignored = new HotelServer(demo, "tcp://localhost:5556")) {
-            Thread.currentThread().join();
-        }
     }
 
     private void handleMessage(String frame) {
@@ -66,9 +60,11 @@ public final class HotelServer implements AutoCloseable {
         }
         String clientId = parts[0];
         String body = parts[1];
+        logger.error(frame);
 
         pool.submit(() -> {
             HotelRequest request = JsonUtil.fromJson(body, HotelRequest.class);
+            logger.info("Received {} from {}", request.getAction(), clientId);
             HotelBooking booking = request.getBooking();
             HotelResponse response;
 
