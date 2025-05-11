@@ -51,71 +51,68 @@ public final class HotelServer implements AutoCloseable {
         backend.listenForResponses(this::handleMessage);
     }
 
-    private void handleMessage(String frame) {
-        // frame = CLIENT_ID \0\0 json
-        String[] parts = frame.split("\0\0", 2);
-        if (parts.length != 2) {
-            logger.warn("Malformed frame (missing delimiter) {}", frame);
-            return;
-        }
-        String clientId = parts[0];
-        String body = parts[1];
-        logger.error(frame);
-
+    private void handleMessage(String json) {
         pool.submit(() -> {
-            HotelRequest request = JsonUtil.fromJson(body, HotelRequest.class);
-            logger.info("Received {} from {}", request.getAction(), clientId);
-            HotelBooking booking = request.getBooking();
+            HotelRequest request = JsonUtil.fromJson(json, HotelRequest.class);
             HotelResponse response;
 
             switch (request.getAction()) {
-                case BOOK -> response = tryBook(booking);
-                case CANCEL -> response = tryCancel(booking);
+                case BOOK -> response = tryBook(request);
+                case CANCEL -> response = tryCancel(request);
                 default -> response = new HotelResponse(
-                        booking.getBookingId(), false,
+                        request.getRequestID(), false,
                         "Unknown action: " + request.getAction());
             }
             // Message loss after local state change
             if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_LOSS_PROBABILITY, "0.0")))) {
-                logger.info("Simulated message loss for {} of booking {}", request.getAction(), booking.getBookingId());
+                logger.info("Simulated message loss for {} of booking {}", request.getAction(), request.getRequestID());
                 return;
             }
-            backend.sendRequest(clientId + "\0\0" + JsonUtil.toJson(response));
+            backend.sendRequest(JsonUtil.toJson(response));
         });
     }
 
-    private HotelResponse tryBook(HotelBooking booking) {
+    private HotelResponse tryBook(HotelRequest request) {
+        HotelBooking booking = request.getBooking();
         Simulation.artificialLatency(
                 Integer.parseInt(config.getProperty(CONFIG_AVERAGE_PROCESSING_TIME, "0")));
 
         synchronized (this) {
             List<UUID> list = bookings.computeIfAbsent(booking.getTimeBlock(), k -> new ArrayList<>());
-            if (list.size() >= hotel.getTotalRooms()) {
-                return new HotelResponse(booking.getBookingId(), false, "No rooms available");
-            }
-            if (list.contains(booking.getBookingId())) {
-                return new HotelResponse(booking.getBookingId(), false, "Booking already exists");
-            }
+
             if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
-                return new HotelResponse(booking.getBookingId(), false, "Simulated internal failure");
+                return new HotelResponse(request.getRequestID(), false, "Simulated internal failure");
             }
-            list.add(booking.getBookingId());
-            logger.info("Booked {} at hotel {} block {}", booking.getBookingId(),
+            if (list.size() >= hotel.getTotalRooms()) {
+                return new HotelResponse(request.getRequestID(), false, "No rooms available");
+            }
+            if (list.contains(request.getRequestID())) {
+                return new HotelResponse(request.getRequestID(), false, "Booking already exists");
+            }
+
+            list.add(request.getRequestID());
+            logger.info("Booked {} at hotel {} block {}", request.getRequestID(),
                     hotel.getId(), booking.getTimeBlock());
         }
-        return new HotelResponse(booking.getBookingId(), true, null);
+        return new HotelResponse(request.getRequestID(), true, null);
     }
 
-    private HotelResponse tryCancel(HotelBooking booking) {
+    private HotelResponse tryCancel(HotelRequest request) {
+        HotelBooking booking = request.getBooking();
         synchronized (this) {
             List<UUID> list = bookings.get(booking.getTimeBlock());
-            if (list == null || !list.remove(booking.getBookingId())) {
-                return new HotelResponse(booking.getBookingId(), false, "No booking to cancel");
+            if (list == null) {
+                return new HotelResponse(request.getRequestID(), false, "No time block to cancel");
             }
-            logger.info("Cancelled {} at hotel {} block {}", booking.getBookingId(),
+            if (!list.contains(request.getRequestID())) {
+                return new HotelResponse(request.getRequestID(), false, "No booking to cancel");
+            }
+            list.remove(request.getRequestID());
+            logger.info("Cancelled {} at hotel {} block {}", request.getRequestID(),
                     hotel.getId(), booking.getTimeBlock());
+
+            return new HotelResponse(request.getRequestID(), true, null);
         }
-        return new HotelResponse(booking.getBookingId(), true, null);
     }
 
     @Override
