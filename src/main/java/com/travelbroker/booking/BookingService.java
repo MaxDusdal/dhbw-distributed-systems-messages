@@ -57,8 +57,8 @@ public final class BookingService implements AutoCloseable {
 
         this.client = new ZeroMQClient(TravelBroker.getClientEndpoint(), SocketType.DEALER);
 
-        Properties config = ConfigProvider.loadConfiguration();
-        int totalRpm = Integer.parseInt(config.getProperty(CONFIG_REQUEST_RATE, "60"));
+        Properties config = ConfigProvider.getConfiguration();
+        int totalRpm = Integer.parseInt(config.getProperty(ConfigProvider.BOOKING_REQUEST_ARRIVAL_RATE, "60"));
         this.rpm = Math.max(1, totalRpm / totalInstances);
         this.interval = Duration.ofMinutes(1).toMillis() / rpm;
 

@@ -27,12 +27,6 @@ import com.travelbroker.util.Simulation;
 // The HotelServer class represents a server for a single hotel.
 public final class HotelServer implements AutoCloseable {
     // Configuration property names for simulation parameters
-    private static final String CONFIG_AVERAGE_PROCESSING_TIME = "AVERAGE_PROCESSING_TIME"; // Average processing time
-    private static final String CONFIG_FAILURE_PROBABILITY = "BOOKING_FAILURE_PROBABILITY"; // Probability that bookings
-                                                                                            // fail
-    private static final String CONFIG_LOSS_PROBABILITY = "MESSAGE_LOSS_PROBABILITY"; // Probability that messages are
-                                                                                      // lost
-
     private static final Logger logger = LoggerFactory.getLogger(HotelServer.class);
 
     // The hotel that this server represents
@@ -57,7 +51,7 @@ public final class HotelServer implements AutoCloseable {
     // Constructor that initializes the server with a specific hotel
     public HotelServer(Hotel hotel) {
         this.hotel = Objects.requireNonNull(hotel);
-        this.config = ConfigProvider.loadConfiguration();
+        this.config = ConfigProvider.getConfiguration();
 
         pool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("business-", 0).factory());
 
@@ -94,7 +88,7 @@ public final class HotelServer implements AutoCloseable {
 
             // Simulates message loss based on configured probability
             // This is for simulating network failures for testing
-            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_LOSS_PROBABILITY,
+            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(ConfigProvider.MESSAGE_LOSS_PROBABILITY,
                     "0.0")))) {
                 logger.info("Simulated message loss for {} of booking {}",
                         request.getAction(), request.getBooking().getBookingId());
@@ -113,7 +107,7 @@ public final class HotelServer implements AutoCloseable {
 
         // Simulates processing delay based on configuration
         Simulation.artificialLatency(
-                Integer.parseInt(config.getProperty(CONFIG_AVERAGE_PROCESSING_TIME, "0")));
+                Integer.parseInt(config.getProperty(ConfigProvider.AVERAGE_PROCESSING_TIME, "0")));
 
         // Synchronizes to prevent concurrent modifications to the bookings map
         synchronized (this) {
@@ -122,7 +116,7 @@ public final class HotelServer implements AutoCloseable {
 
             // Simulates internal booking failure based on configuration
             if (Simulation
-                    .artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
+                    .artificialFailure(Double.parseDouble(config.getProperty(ConfigProvider.BOOKING_FAILURE_PROBABILITY, "0.0")))) {
                 return new HotelResponse(request.getRequestID(), false,
                         "Simulated internal failure");
             }
@@ -159,7 +153,7 @@ public final class HotelServer implements AutoCloseable {
 
             // Simulates internal booking failure based on configuration
             if (Simulation
-                    .artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
+                    .artificialFailure(Double.parseDouble(config.getProperty(ConfigProvider.BOOKING_FAILURE_PROBABILITY, "0.0")))) {
                 return new HotelResponse(request.getRequestID(), false,
                         "Simulated internal failure");
             }

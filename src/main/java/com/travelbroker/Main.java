@@ -4,6 +4,7 @@ import com.travelbroker.booking.BookingService;
 import com.travelbroker.broker.TravelBroker;
 import com.travelbroker.hotel.HotelServer;
 import com.travelbroker.model.Hotel;
+import com.travelbroker.util.ConfigProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +17,17 @@ import java.util.concurrent.CountDownLatch;
  * • One HotelServer per hotel – each connects to tcp://localhost:5556
  * • N BookingService instances – each connects to tcp://localhost:5555
  * <p>
+ * Command line arguments can be used to override configuration:
+ * • java -jar travel-broker.jar BOOKING_SERVICES=3 HOTELS=5 BOOKING_REQUEST_ARRIVAL_RATE=20
+ * • java -jar travel-broker.jar BOOKING_FAILURE_PROBABILITY=0.2
+ * • Available parameters:
+ *   - BOOKING_SERVICES: Number of booking service instances (default: 3)
+ *   - HOTELS: Number of hotel servers (default: 5)
+ *   - BOOKING_REQUEST_ARRIVAL_RATE: Rate of booking requests per minute (default: 10)
+ *   - AVERAGE_PROCESSING_TIME: Average processing time in ms (default: 0)
+ *   - BOOKING_FAILURE_PROBABILITY: Probability of booking failure (0.0-1.0, default: 0.0)
+ *   - MESSAGE_LOSS_PROBABILITY: Probability of message loss (0.0-1.0, default: 0.0)
+ * <p>
  * Press ENTER (or send CTRL-C) to stop everything gracefully.
  */
 public final class Main {
@@ -24,20 +36,30 @@ public final class Main {
 
     private static final int DEFAULT_BOOKING_SERVICES = 3;
     private static final int DEFAULT_HOTEL_COUNT = 5;
+    
+    private static final String PARAM_BOOKING_SERVICES = "BOOKING_SERVICES";
+    private static final String PARAM_HOTELS = "HOTELS";
 
     private static final CountDownLatch LATCH = new CountDownLatch(1);
 
     public static void main(String[] args) {
-
-        int bookingServiceCount = parseInstanceCount(args, DEFAULT_BOOKING_SERVICES);
-        List<Hotel> hotels = createHotels(DEFAULT_HOTEL_COUNT);
+        // Load configuration with command line arguments
+        Properties config = ConfigProvider.loadConfiguration(args);
+        
+        // Extract non-property configuration parameters
+        int bookingServiceCount = getIntParam(config, PARAM_BOOKING_SERVICES, DEFAULT_BOOKING_SERVICES);
+        int hotelCount = getIntParam(config, PARAM_HOTELS, DEFAULT_HOTEL_COUNT);
+        
+        List<Hotel> hotels = createHotels(hotelCount);
 
         try (TravelBroker broker = new TravelBroker("tcp://*:5555", "tcp://*:5556")) {
             broker.start(); 
 
             List<HotelServer> hotelServers = startHotelServers(hotels); // 2. hotels
-            List<BookingService> bookingServices = startBookingServices(broker, bookingServiceCount, hotels); // 3.
-                                                                                                              // clients
+            List<BookingService> bookingServices = startBookingServices(broker, bookingServiceCount, hotels); // 3. clients
+
+            // Log the current configuration
+            logConfiguration(config, bookingServiceCount, hotelCount);
 
             // shutdown hook so Ctrl-C works as well
             Runtime.getRuntime().addShutdownHook(new Thread(LATCH::countDown));
@@ -54,16 +76,29 @@ public final class Main {
         logger.info("System shutdown complete");
     }
 
-    private static int parseInstanceCount(String[] args, int defaultValue) {
-        if (args.length == 0)
-            return defaultValue;
-        try {
-            int val = Integer.parseInt(args[0]);
-            return val > 0 ? val : defaultValue;
-        } catch (NumberFormatException nfe) {
-            logger.warn("Invalid instance count argument '{}', using default {}", args[0], defaultValue);
-            return defaultValue;
+    private static int getIntParam(Properties config, String key, int defaultValue) {
+        String value = config.getProperty(key);
+        if (value != null) {
+            try {
+                int val = Integer.parseInt(value);
+                if (val > 0) {
+                    return val;
+                }
+            } catch (NumberFormatException nfe) {
+                logger.warn("Invalid value for {}: '{}', using default {}", key, value, defaultValue);
+            }
         }
+        return defaultValue;
+    }
+
+    private static void logConfiguration(Properties config, int bookingServices, int hotels) {
+        logger.info("System configuration:");
+        logger.info("- Booking Services: {}", bookingServices);
+        logger.info("- Hotels: {}", hotels);
+        logger.info("- Booking Request Rate: {}/min", config.getProperty(ConfigProvider.BOOKING_REQUEST_ARRIVAL_RATE));
+        logger.info("- Average Processing Time: {} ms", config.getProperty(ConfigProvider.AVERAGE_PROCESSING_TIME));
+        logger.info("- Booking Failure Probability: {}", config.getProperty(ConfigProvider.BOOKING_FAILURE_PROBABILITY));
+        logger.info("- Message Loss Probability: {}", config.getProperty(ConfigProvider.MESSAGE_LOSS_PROBABILITY));
     }
 
     private static List<Hotel> createHotels(int count) {

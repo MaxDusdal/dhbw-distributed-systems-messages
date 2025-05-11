@@ -58,7 +58,7 @@ public class TravelSystemIntegrationTest {
     @BeforeEach
     void setUp() throws IOException {
         // Save original configuration
-        originalProperties = ConfigProvider.loadConfiguration();
+        originalProperties = ConfigProvider.getConfiguration();
         
         // Create test configuration 
         testProperties = new Properties();
