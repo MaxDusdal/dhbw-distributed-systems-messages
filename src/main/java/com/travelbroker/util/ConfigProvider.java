@@ -25,7 +25,7 @@ public class ConfigProvider {
             }
 
             properties.load(input);
-            logger.debug("Loaded configuration: {}", properties);
+            logger.debug("Loaded configuration");
         } catch (IOException e) {
             logger.error("Error loading configuration: {}", e.getMessage(), e);
         }

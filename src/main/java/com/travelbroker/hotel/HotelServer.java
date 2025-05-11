@@ -45,7 +45,7 @@ public final class HotelServer implements AutoCloseable {
 
         backend = new ZeroMQClient(backendEndpoint, SocketType.DEALER);
         backend.connect();
-        backend.sendRequest("READY");                // tell broker we are idle
+        backend.sendRequest("READY:" + hotel.getId()); // tell broker that system is idle
 
         backend.listenForResponses(this::handleMessage);
     }

@@ -2,126 +2,120 @@ package com.travelbroker;
 
 import com.travelbroker.booking.BookingService;
 import com.travelbroker.broker.TravelBroker;
+import com.travelbroker.hotel.HotelServer;
 import com.travelbroker.model.Hotel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 
 /**
- * Main entry point for the application.
+ * Boots the whole distributed demo:
+ *   • TravelBroker (front-end :5555, back-end :5556)
+ *   • One HotelServer per hotel – each connects to tcp://localhost:5556
+ *   • N BookingService instances – each connects to tcp://localhost:5555
+ * <p>
+ * Press ENTER (or send SIGINT) to stop everything gracefully.
  */
-public class Main {
+public final class Main {
+
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
-    private static final int DEFAULT_BOOKING_SERVICE_COUNT = 3;
-    private static final int DEFAULT_HOTEL_COUNT = 5;
-    private static final CountDownLatch shutdownLatch = new CountDownLatch(1);
-    
+
+    private static final int DEFAULT_BOOKING_SERVICES = 3;
+    private static final int DEFAULT_HOTEL_COUNT      = 5;
+    private static final String BACKEND_CONNECT_ADDRESS = "tcp://localhost:5556";
+
+    private static final CountDownLatch LATCH = new CountDownLatch(1);
+
     public static void main(String[] args) {
-        logger.info("Starting Travel Broker Distributed System");
-        
-        // Number of booking service instances
-        int bookingServiceCount = DEFAULT_BOOKING_SERVICE_COUNT;
-        if (args.length > 0) {
-            try {
-                bookingServiceCount = Integer.parseInt(args[0]);
-                if (bookingServiceCount < 1) {
-                    logger.warn("Invalid booking service count {}, using default of {}", 
-                            bookingServiceCount, DEFAULT_BOOKING_SERVICE_COUNT);
-                    bookingServiceCount = DEFAULT_BOOKING_SERVICE_COUNT;
-                }
-            } catch (NumberFormatException e) {
-                logger.warn("Invalid booking service count argument, using default of {}", 
-                        DEFAULT_BOOKING_SERVICE_COUNT);
-            }
+
+        int bookingServiceCount = parseInstanceCount(args, DEFAULT_BOOKING_SERVICES);
+        List<Hotel> hotels      = createHotels(DEFAULT_HOTEL_COUNT);
+
+        try (TravelBroker broker = new TravelBroker("tcp://*:5555", "tcp://*:5556")) {
+            broker.start();                                     // 1. broker up
+
+            List<HotelServer> hotelServers = startHotelServers(hotels);      // 2. hotels
+            List<BookingService> bookingServices =
+                    startBookingServices(broker, bookingServiceCount, hotels); // 3. clients
+
+            // shutdown hook so Ctrl-C works as well
+            Runtime.getRuntime().addShutdownHook(new Thread(LATCH::countDown));
+
+            logger.info("System running – press ENTER to quit.");
+            waitForEnter();                                     // block here
+
+            // ── graceful shutdown (reverse order) ─────────────
+            bookingServices.forEach(Main::closeQuietly);
+            hotelServers.forEach(Main::closeQuietly);
+
+        } catch (Exception ex) {
+            logger.error("Fatal error in Main", ex);
         }
-        logger.info("Creating {} booking service instances", bookingServiceCount);
-        
-        // Create hotels
-        List<Hotel> hotels = createHotels(DEFAULT_HOTEL_COUNT);
-        logger.info("Created {} hotels", hotels.size());
-        
-        // Create and start the TravelBroker (singleton)
-        try (TravelBroker travelBroker = new TravelBroker()) {
-            travelBroker.start();
-            
-            // Create and start the BookingService instances
-            List<BookingService> bookingServices = new ArrayList<>();
-            try {
-                for (int i = 0; i < bookingServiceCount; i++) {
-                    BookingService bookingService = new BookingService(travelBroker, bookingServiceCount, hotels);
-                    bookingServices.add(bookingService);
-                    bookingService.start();
-                }
-                
-                // Register shutdown hook to gracefully close resources
-                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                    logger.info("Shutdown initiated");
-                    shutdownLatch.countDown();
-                }));
-                
-                // Wait for user input to exit
-                logger.info("System running. Press Enter to exit.");
-                waitForUserInput();
-                
-            } finally {
-                // Close all booking services
-                for (BookingService bookingService : bookingServices) {
-                    try {
-                        bookingService.close();
-                    } catch (Exception e) {
-                        logger.error("Error closing booking service: {}", e.getMessage(), e);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Error in main thread: {}", e.getMessage(), e);
-        }
-        
+
         logger.info("System shutdown complete");
     }
-    
-    /**
-     * Creates a list of hotels.
-     *
-     * @param count The number of hotels to create
-     * @return A list of hotels
-     */
-    private static List<Hotel> createHotels(int count) {
-        List<Hotel> hotels = new ArrayList<>();
-        
-        // Create hotels with varying room capacities
-        for (int i = 1; i <= count; i++) {
-            String id = "H" + i;
-            String name = "Hotel " + i;
-            int totalRooms = 20 + (i * 10); // 30, 40, 50, 60, 70 rooms
-            
-            hotels.add(new Hotel(id, name, totalRooms));
-            logger.info("Created hotel: {} ({}, {} rooms)", id, name, totalRooms);
-        }
-        
-        return hotels;
-    }
-    
-    /**
-     * Waits for user input to exit the application.
-     */
-    private static void waitForUserInput() {
-        Thread inputThread = new Thread(() -> {
-            Scanner scanner = new Scanner(System.in);
-            scanner.nextLine();
-            shutdownLatch.countDown();
-        });
-        inputThread.setDaemon(true);
-        inputThread.start();
-        
+
+    // ── helpers ──────────────────────────────────────────────────────
+    private static int parseInstanceCount(String[] args, int defaultVal) {
+        if (args.length == 0) return defaultVal;
         try {
-            shutdownLatch.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            int val = Integer.parseInt(args[0]);
+            return val > 0 ? val : defaultVal;
+        } catch (NumberFormatException nfe) {
+            logger.warn("Invalid instance count argument '{}', using default {}", args[0], defaultVal);
+            return defaultVal;
         }
+    }
+
+    private static List<Hotel> createHotels(int count) {
+        List<Hotel> list = new ArrayList<>(count);
+        for (int i = 1; i <= count; i++) {
+            String id   = "H" + i;
+            String name = "Hotel " + i;
+            int rooms   = 20 + i * 10;               // 30, 40, …
+            list.add(new Hotel(id, name, rooms));
+            logger.info("Created hotel {} ({} rooms)", name, rooms);
+        }
+        return list;
+    }
+
+    private static List<HotelServer> startHotelServers(List<Hotel> hotels) {
+        List<HotelServer> servers = new ArrayList<>(hotels.size());
+        for (Hotel h : hotels) {
+            String backendConnectAddress = TravelBroker.getBackendEndpoint();
+            HotelServer server = new HotelServer(h, backendConnectAddress);
+            servers.add(server);
+            logger.info("Started HotelServer for {} on {}", h.getId(), backendConnectAddress);
+        }
+        return servers;
+    }
+
+    private static List<BookingService> startBookingServices(TravelBroker broker,
+                                                             int instances,
+                                                             List<Hotel> hotels) {
+        List<BookingService> list = new ArrayList<>(instances);
+        for (int i = 0; i < instances; i++) {
+            BookingService bs = new BookingService(broker, instances, hotels);
+            bs.start();
+            list.add(bs);
+        }
+        return list;
+    }
+
+    private static void waitForEnter() {
+        new Thread(() -> {
+            try (Scanner sc = new Scanner(System.in)) { sc.nextLine(); }
+            finally { LATCH.countDown(); }
+        }, "stdin-wait").start();
+
+        try { LATCH.await(); }
+        catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+    }
+
+    private static void closeQuietly(AutoCloseable c) {
+        try { c.close(); }
+        catch (Exception ex) { logger.error("Error closing {}", c.getClass().getSimpleName(), ex); }
     }
 }
