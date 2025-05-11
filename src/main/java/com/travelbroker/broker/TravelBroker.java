@@ -5,17 +5,14 @@ import com.travelbroker.dto.BookingResponse;
 import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.dto.HotelResponse;
 import com.travelbroker.model.BookingStatus;
+import com.travelbroker.model.HotelAction;
 import com.travelbroker.network.ZeroMQClient;
 import com.travelbroker.util.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.*;
 
 /**
@@ -32,7 +29,7 @@ public final class TravelBroker implements AutoCloseable {
     private static final long BOOKING_TIMEOUT_MS = 30_000;
     private static final long TIMEOUT_SWEEP_MS = 5_000;
     // Worker (hotel) registration
-    private final Map<String, String> hotelToWorker = new ConcurrentHashMap<>();
+    private final Map<String, String> hotelToWorker = new ConcurrentHashMap<>(); // TODO: Change data type to UUID
     private final Map<String, String> workerToHotel = new ConcurrentHashMap<>(); // inverse map for fast lookup
     /**
      * bookingId → aggregate state
@@ -139,7 +136,7 @@ public final class TravelBroker implements AutoCloseable {
         for (HotelRequest hr : request.getHotelRequests()) {
             String hotelId = hr.getBooking().getHotelId();
             String workerId = hotelToWorker.get(hotelId);
-            pendingBooking.registerRequest(hr.getRequestID()); // Tracks request using unique id
+            pendingBooking.registerRequest(hr); // Tracks request using unique id
             String payload = JsonUtil.toJson(hr);
             String message = workerId + "\0\0" + payload; // ROUTER envelope
             boolean sent = backEnd.sendRequest(message);
@@ -208,13 +205,12 @@ public final class TravelBroker implements AutoCloseable {
     }
 
     private void finalizeBooking(PendingBooking pb) {
-        if (pb.allBookingsSuccessful()) {
-            pb.setStatus(BookingStatus.CONFIRMED);
-            replyToClient(pb, "All hotel bookings confirmed");
-        } else {
-            pb.setStatus(BookingStatus.FAILED);
-            replyToClient(pb, "One or more hotels rejected the booking");
+        if (!pb.allBookingsSuccessful()) {
+            initiateRollback(pb);
+            return;
         }
+        pb.setStatus(BookingStatus.CONFIRMED);
+        replyToClient(pb, "All hotel bookings confirmed");
         pendingBookings.remove(pb.bookingId);
     }
 
@@ -222,10 +218,54 @@ public final class TravelBroker implements AutoCloseable {
         long now = System.currentTimeMillis();
         for (PendingBooking pb : List.copyOf(pendingBookings.values())) {
             if (now - pb.createdAt > BOOKING_TIMEOUT_MS && !pb.allBookingsAnswered()) {
-                pb.setStatus(BookingStatus.FAILED);
-                replyToClient(pb, "Timeout waiting for hotel replies");
-                pendingBookings.remove(pb.bookingId);
+                initiateRollback(pb);
             }
+        }
+    }
+
+    private void initiateRollback(PendingBooking pb) {
+        pb.setStatus(BookingStatus.FAILED);
+        replyToClient(pb, "Timeout waiting for hotel replies");
+        pb.setStatus(BookingStatus.ROLLING_BACK);
+        rollbackHotelBookings(pb);
+    }
+
+    private void rollbackHotelBookings(PendingBooking pb) {
+        int CANCELLATION_RETRIES = 5;
+
+        for (int i = 0; i < CANCELLATION_RETRIES; i++) {
+            cancelHotelBookings(pb);
+            try {
+                long BACKOFF_BASE_MS = 1000;
+                int sleepMs = (int) Math.min(BOOKING_TIMEOUT_MS, BACKOFF_BASE_MS * Math.pow(2, i + 1));
+                Thread.sleep(sleepMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (pb.allBookingsSuccessful()) {
+                pb.setStatus(BookingStatus.ROLLBACK_SUCCESS);
+                replyToClient(pb, "All hotel bookings rolled back successfully");
+                pendingBookings.remove(pb.bookingId);
+                return;
+            }
+        }
+        pb.setStatus(BookingStatus.ROLLBACK_TIMEOUT);
+        replyToClient(pb, "Failed to roll back all hotel bookings");
+        pendingBookings.remove(pb.bookingId);
+    }
+
+    private void cancelHotelBookings(PendingBooking pb) {
+        pb.removeConsistentBookings();
+
+        for (HotelRequest hr : pb.hotelRequests.values()) {
+            String hotelId = hr.getBooking().getHotelId();
+            String workerId = hotelToWorker.get(hotelId);
+            hr.setAction(HotelAction.CANCEL);
+            hr.successful = false;
+            hr.answered = false;
+            String payload = JsonUtil.toJson(hr);
+            String message = workerId + "\0\0" + payload;
+            backEnd.sendRequest(message);
         }
     }
 
@@ -239,7 +279,7 @@ public final class TravelBroker implements AutoCloseable {
 
     private UUID findBookingIdByRequestId(UUID requestId) {
         return pendingBookings.entrySet().stream()
-                .filter(entry -> entry.getValue().requestResults.containsKey(requestId))
+                .filter(entry -> entry.getValue().getRequestResults().containsKey(requestId))
                 .map(Map.Entry::getKey)
                 .findFirst()
                 .orElse(null);
@@ -249,7 +289,7 @@ public final class TravelBroker implements AutoCloseable {
         private final String clientId;
         private final UUID bookingId;
         private final long createdAt = System.currentTimeMillis();
-        private final Map<UUID, Boolean> requestResults = new HashMap<>();
+        private final Map<UUID, HotelRequest> hotelRequests = new HashMap<>();
         private volatile BookingStatus status = BookingStatus.PENDING;
 
         PendingBooking(String clientId, BookingRequest req) {
@@ -257,27 +297,34 @@ public final class TravelBroker implements AutoCloseable {
             this.bookingId = req.getBookingId();
         }
 
-        void registerRequest(UUID requestId) {
-            // ERROR: requestResults.put(requestId, null); -> causes a null pointer
-            // exception
-            requestResults.put(requestId, null);
+        void registerRequest(HotelRequest hr) {
+            hotelRequests.put(hr.getRequestID(), hr);
         }
 
         void recordBookingResult(UUID requestId, boolean ok) {
-            requestResults.put(requestId, ok);
+            HotelRequest hr = hotelRequests.get(requestId);
+            hr.successful = ok;
+            hr.answered = true;
         }
 
         boolean allBookingsAnswered() {
-            return !requestResults.containsValue(null);
+            return hotelRequests.values().stream().allMatch(hr -> hr.answered);
         }
 
         boolean allBookingsSuccessful() {
-            return !requestResults.containsValue(Boolean.FALSE);
+            return hotelRequests.values().stream().allMatch(hr -> hr.successful);
         }
 
         void setStatus(BookingStatus st) {
             this.status = st;
         }
 
+        Map<UUID, HotelRequest> getRequestResults() {
+            return hotelRequests;
+        }
+
+        void removeConsistentBookings() {
+            hotelRequests.entrySet().removeIf(entry -> entry.getValue().answered && entry.getValue().successful);
+        }
     }
 }

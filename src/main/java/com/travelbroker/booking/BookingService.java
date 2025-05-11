@@ -5,6 +5,7 @@ import com.travelbroker.dto.BookingRequest;
 import com.travelbroker.dto.BookingResponse;
 import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.model.Hotel;
+import com.travelbroker.model.HotelAction;
 import com.travelbroker.model.HotelBooking;
 import com.travelbroker.model.TripBooking;
 import com.travelbroker.network.ZeroMQClient;
@@ -71,7 +72,7 @@ public final class BookingService implements AutoCloseable {
         HotelRequest[] hotelRequests = Arrays.stream(tripBooking.getHotelBookings())
                 .map(hotelBooking -> new HotelRequest(
                         hotelBooking,
-                        HotelRequest.Action.BOOK))
+                        HotelAction.BOOK))
                 .toArray(HotelRequest[]::new);
 
         return new BookingRequest(

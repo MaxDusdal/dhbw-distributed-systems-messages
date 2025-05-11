@@ -2,42 +2,36 @@ package com.travelbroker.dto;
 
 import com.travelbroker.model.HotelBooking;
 import java.util.UUID;
+import com.travelbroker.model.HotelAction;
 
 public class HotelRequest {
-    public enum Action {
-        BOOK,
-        CANCEL
-    }
     private HotelBooking booking;
-    private Action action;
-    private boolean confirmed;
+    private HotelAction action;
+    public boolean answered;
+    public boolean successful;
     private UUID requestID;
 
     // Required for Gson deserialization
     public HotelRequest() {
     }
 
-    public HotelRequest(HotelBooking booking, Action action) {
+    public HotelRequest(HotelBooking booking, HotelAction action) {
         this.booking = booking;
         this.action = action;
-        this.confirmed = false;
         this.requestID = UUID.randomUUID();
+        this.answered = false;
     }
 
     public HotelBooking getBooking() {
         return booking;
     }
 
-    public Action getAction() {
+    public HotelAction getAction() {
         return action;
     }
 
-    public boolean isConfirmed() {
-        return confirmed;
-    }
-
-    public void setConfirmed(boolean confirmed) {
-        this.confirmed = confirmed;
+    public void setAction(HotelAction action) {
+        this.action = action;
     }
 
     public UUID getRequestID() {
