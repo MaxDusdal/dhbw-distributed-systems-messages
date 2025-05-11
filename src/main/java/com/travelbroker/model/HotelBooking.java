@@ -12,7 +12,6 @@ public class HotelBooking implements Serializable {
     private UUID bookingId;
     private String hotelId;
     private int timeBlock;
-//    private boolean confirmed;
 
     /**
      * Creates a new hotel booking
@@ -35,7 +34,6 @@ public class HotelBooking implements Serializable {
         this.bookingId = bookingId;
         this.hotelId = hotelId;
         this.timeBlock = timeBlock;
-//        this.confirmed = false;
     }
 
     public UUID getBookingId() {
@@ -61,13 +59,4 @@ public class HotelBooking implements Serializable {
     public void setTimeBlock(int timeBlock) {
         this.timeBlock = timeBlock;
     }
-
-//    public boolean isConfirmed() {
-//        return confirmed;
-//    }
-//
-//    public void setConfirmed(boolean confirmed) {
-//        this.confirmed = confirmed;
-//    }
-
 }
