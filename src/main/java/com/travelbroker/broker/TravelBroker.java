@@ -1,6 +1,7 @@
 package com.travelbroker.broker;
 
 import com.travelbroker.dto.BookingRequest;
+import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.dto.BookingResponse;
 import com.travelbroker.model.BookingStatus;
 import com.travelbroker.network.ZeroMQClient;
@@ -130,7 +131,7 @@ public class TravelBroker implements AutoCloseable {
                 logger.info("Received booking request: BookingId={}, CustomerId={}, Hotels={}",
                         bookingRequest.getBookingId(), 
                         bookingRequest.getCustomerId(),
-                        bookingRequest.getHotelBookings().length);
+                        bookingRequest.getHotelRequests().length);
                 
                 // Process the booking request asynchronously
                 processorThreadPool.submit(() -> processBookingRequestAsync(bookingRequest, routingId));
@@ -272,8 +273,8 @@ public class TravelBroker implements AutoCloseable {
             this.status = BookingStatus.PENDING;
             
             // Initialize hotel responses
-            for (BookingRequest.HotelBookingDTO hotelBooking : request.getHotelBookings()) {
-                hotelResponses.put(hotelBooking.getHotelId(), null); // null means no response yet
+            for (HotelRequest hotelRequest : request.getHotelRequests()) {
+                hotelResponses.put(hotelRequest.getBooking().getHotelId(), null); // null means no response yet
             }
         }
         

@@ -10,17 +10,17 @@ public class BookingRequest {
     private UUID bookingId;
     private UUID customerId;
     private String status;
-    private HotelBookingDTO[] hotelBookings;
+    private HotelRequest[] hotelRequests;
 
     // Required for Gson deserialization
     public BookingRequest() {
     }
 
-    public BookingRequest(UUID bookingId, UUID customerId, String status, HotelBookingDTO[] hotelBookings) {
+    public BookingRequest(UUID bookingId, UUID customerId, String status, HotelRequest[] hotelRequests) {
         this.bookingId = bookingId;
         this.customerId = customerId;
         this.status = status;
-        this.hotelBookings = hotelBookings;
+        this.hotelRequests = hotelRequests;
     }
 
     public UUID getBookingId() {
@@ -47,54 +47,13 @@ public class BookingRequest {
         this.status = status;
     }
 
-    public HotelBookingDTO[] getHotelBookings() {
-        return hotelBookings;
+    public HotelRequest[] getHotelRequests() {
+        return hotelRequests;
     }
 
-    public void setHotelBookings(HotelBookingDTO[] hotelBookings) {
-        this.hotelBookings = hotelBookings;
+    public void setHotelRequests(HotelRequest[] hotelRequests) {
+        this.hotelRequests = hotelRequests;
     }
 
-    /**
-     * Data transfer object for hotel bookings within a booking request.
-     */
-    public static class HotelBookingDTO {
-        private UUID bookingId;
-        private String hotelId;
-        private int timeBlock;
 
-        // Required for Gson deserialization
-        public HotelBookingDTO() {
-        }
-
-        public HotelBookingDTO(UUID bookingId, String hotelId, int timeBlock) {
-            this.bookingId = bookingId;
-            this.hotelId = hotelId;
-            this.timeBlock = timeBlock;
-        }
-
-        public UUID getBookingId() {
-            return bookingId;
-        }
-
-        public void setBookingId(UUID bookingId) {
-            this.bookingId = bookingId;
-        }
-
-        public String getHotelId() {
-            return hotelId;
-        }
-
-        public void setHotelId(String hotelId) {
-            this.hotelId = hotelId;
-        }
-
-        public int getTimeBlock() {
-            return timeBlock;
-        }
-
-        public void setTimeBlock(int timeBlock) {
-            this.timeBlock = timeBlock;
-        }
-    }
-} 
+}
