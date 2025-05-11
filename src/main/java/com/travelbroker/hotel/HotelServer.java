@@ -80,7 +80,7 @@ public final class HotelServer implements AutoCloseable {
                         "Unknown action: " + request.getAction());
             }
             // Message loss after local state change
-            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_FAILURE_PROBABILITY, "0.0")))) {
+            if (Simulation.artificialFailure(Double.parseDouble(config.getProperty(CONFIG_LOSS_PROBABILITY, "0.0")))) {
                 logger.info("Simulated message loss for {} of booking {}", request.getAction(), booking.getBookingId());
                 return;
             }

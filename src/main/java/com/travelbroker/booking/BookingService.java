@@ -3,6 +3,7 @@ package com.travelbroker.booking;
 import com.travelbroker.broker.TravelBroker;
 import com.travelbroker.dto.BookingRequest;
 import com.travelbroker.dto.BookingResponse;
+import com.travelbroker.dto.HotelRequest;
 import com.travelbroker.model.Hotel;
 import com.travelbroker.model.HotelBooking;
 import com.travelbroker.model.TripBooking;
@@ -15,289 +16,190 @@ import org.zeromq.SocketType;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Client system that generates booking requests at a configured rate
- * and logs results.
+ * Periodically generates booking requests and processes asynchronous replies.
  */
-public class BookingService implements AutoCloseable {
+public final class BookingService implements AutoCloseable {
+
+    // ── constants ────────────────────────────────────────────────────
     private static final Logger logger = LoggerFactory.getLogger(BookingService.class);
-    private static final String CONFIG_FILE = "config.properties";
-    private static final AtomicInteger instanceCounter = new AtomicInteger(0);
-    
-    private final int instanceId;
-    private final Random random = new Random();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+    private static final String CONFIG_REQUEST_RATE = "BOOKING_REQUEST_ARRIVAL_RATE";
+    private static final int MAX_TIME_BLOCK = 100;
+    private static final AtomicInteger COUNTER = new AtomicInteger(0);
+
+    private final int instanceId = COUNTER.incrementAndGet();
     private final ZeroMQClient client;
-    private final Properties config;
-    private final int requestsPerMinute;
-    private final long intervalBetweenRequests;
-    private final List<Hotel> availableHotels;
-    
-    // Map to track pending requests by booking ID
-    private final Map<UUID, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
-    
-    private boolean isRunning = false;
-    
-    /**
-     * Creates a new BookingService with the specified TravelBroker and hotels.
-     *
-     * @param travelBroker    The TravelBroker to send booking requests to
-     * @param totalInstances  The total number of BookingService instances
-     * @param availableHotels The list of available hotels to book
-     */
-    public BookingService(TravelBroker travelBroker, int totalInstances, List<Hotel> availableHotels) {
-        this.instanceId = instanceCounter.incrementAndGet();
-        this.availableHotels = availableHotels;
-        
-        if (availableHotels == null || availableHotels.isEmpty()) {
-            throw new IllegalArgumentException("Available hotels cannot be null or empty");
+    private final ScheduledExecutorService scheduler;
+    private final List<Hotel> hotels;
+    private final Map<UUID, PendingRequest> pending = new ConcurrentHashMap<>();
+
+    private final int rpm;      // requests per minute for THIS instance
+    private final long interval; // milliseconds between requests
+
+    private volatile boolean running;
+
+    public BookingService(TravelBroker broker,
+                          int totalInstances,
+                          List<Hotel> availableHotels) {
+
+        Objects.requireNonNull(broker, "broker");
+        Objects.requireNonNull(availableHotels, "availableHotels");
+        if (availableHotels.isEmpty()) {
+            throw new IllegalArgumentException("No hotels provided");
         }
-        
-        String brokerEndpoint = travelBroker.getClientEndpoint();
-        
-        this.client = new ZeroMQClient(brokerEndpoint, SocketType.DEALER);
-        
-        this.config = ConfigProvider.loadConfiguration();
-        
-        int totalRequestsPerMinute = Integer.parseInt(config.getProperty("BOOKING_REQUEST_ARRIVAL_RATE", "100"));
-        this.requestsPerMinute = totalRequestsPerMinute / totalInstances;
-        
-        this.intervalBetweenRequests = Duration.ofMinutes(1).toMillis() / requestsPerMinute;
-        
-        logger.info(
-                "BookingService#{} initialized with {} requests/minute (interval: {} ms), {} hotels available, connecting to broker at {}",
-                instanceId, requestsPerMinute, intervalBetweenRequests, availableHotels.size(), brokerEndpoint);
+        this.hotels = List.copyOf(availableHotels);
+
+        this.client = new ZeroMQClient(broker.getClientEndpoint(), SocketType.DEALER);
+
+        Properties config = ConfigProvider.loadConfiguration();
+        int totalRpm = Integer.parseInt(config.getProperty(CONFIG_REQUEST_RATE, "60"));
+        this.rpm = Math.max(1, totalRpm / totalInstances);
+        this.interval = Duration.ofMinutes(1).toMillis() / rpm;
+
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(
+                r -> new Thread(r, "booking-gen-" + instanceId));
+
+        logger.info("BookingService#{} rpm={}  interval={}ms  hotels={}  broker={}",
+                instanceId, rpm, interval, hotels.size(), broker.getClientEndpoint());
     }
-    
-    /**
-     * Starts sending booking requests at the configured rate.
-     */
-    public void start() {
-        if (isRunning) {
-            return;
-        }
-        
-        try {
-            client.connect();
-            isRunning = true;
-            
-            // Start the response listener
-            client.listenForResponses(this::handleBookingResponse);
-            
-            // Schedule booking requests
-            scheduler.scheduleAtFixedRate(
-                    this::sendRandomBookingRequest,
-                    0,
-                    intervalBetweenRequests,
-                    TimeUnit.MILLISECONDS);
-            
-            logger.info("BookingService#{} started sending requests", instanceId);
-        } catch (Exception e) {
-            logger.error("Failed to start BookingService: {}", e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Stops sending booking requests.
-     */
-    public void stop() {
-        if (!isRunning) {
-            return;
-        }
-        
-        isRunning = false;
-        scheduler.shutdown();
-        try {
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scheduler.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-        
-        logger.info("BookingService#{} stopped", instanceId);
-    }
-    
-    /**
-     * Sends a random booking request to the TravelBroker.
-     */
-    private void sendRandomBookingRequest() {
-        try {
-            // Generate a random trip booking
-            TripBooking booking = generateRandomTripBooking();
-            UUID bookingId = booking.getBookingId();
-            
-            // Convert trip booking to DTO for JSON serialization
-            BookingRequest bookingRequest = convertTripBookingToDto(booking);
-            
-            // Store the pending request
-            pendingRequests.put(bookingId, new PendingRequest(booking));
-            
-            // Convert DTO to JSON
-            String bookingJson = JsonUtil.toJson(bookingRequest);
-            
-            // Send the booking request asynchronously
-            logger.info("BookingService#{} sending booking request: {}", instanceId, bookingId);
-            boolean sent = client.sendRequest(bookingJson);
-            
-            if (!sent) {
-                logger.error("Failed to send booking request: {}", bookingId);
-                pendingRequests.remove(bookingId);
-            }
-        } catch (Exception e) {
-            logger.error("Error sending booking request: {}", e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Handles the response from the TravelBroker for a booking request.
-     *
-     * @param response The JSON response from the TravelBroker
-     */
-    private void handleBookingResponse(String response) {
-        try {
-            BookingResponse bookingResponse = JsonUtil.fromJson(response, BookingResponse.class);
-            
-            if (bookingResponse == null || bookingResponse.getBookingId() == null) {
-                logger.error("Invalid response format or missing booking ID: {}", response);
-                return;
-            }
-            
-            UUID bookingId = bookingResponse.getBookingId();
-       
-            // Get the pending request
-            PendingRequest pendingRequest = pendingRequests.get(bookingId);
-            if (pendingRequest == null) {
-                logger.warn("Received response for unknown booking: {}", bookingId);
-                return;
-            }
-            
-            // Update the status of the pending request
-            pendingRequest.setStatus(bookingResponse.getStatus());
-            pendingRequest.setResponseTime(System.currentTimeMillis());
-            
-            logger.info("BookingService#{} received response for booking {}: Status={}, Message={}, Response Time={}ms",
-                    instanceId, bookingId, bookingResponse.getStatus(), 
-                    bookingResponse.getMessage(),
-                    pendingRequest.getResponseTime() - pendingRequest.getRequestTime());
-            
-            // Remove the pending request
-            pendingRequests.remove(bookingId);
-            
-            // In a real implementation, we would update the booking in a persistent store
-        } catch (Exception e) {
-            logger.error("Error processing booking response: {}", e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Converts a TripBooking to a BookingRequest DTO.
-     *
-     * @param tripBooking The trip booking to convert
-     * @return The BookingRequest DTO
-     */
-    private BookingRequest convertTripBookingToDto(TripBooking tripBooking) {
-        HotelBooking[] hotelBookings = tripBooking.getHotelBookings();
-        BookingRequest.HotelBookingDTO[] hotelBookingDtos = new BookingRequest.HotelBookingDTO[hotelBookings.length];
-        
-        for (int i = 0; i < hotelBookings.length; i++) {
-            HotelBooking hb = hotelBookings[i];
-            hotelBookingDtos[i] = new BookingRequest.HotelBookingDTO(
-                    hb.getBookingId(),
-                    hb.getHotelId(),
-                    hb.getTimeBlock());
-        }
-        
+
+    private static BookingRequest toDto(TripBooking tripBooking) {
+        HotelRequest[] hotelRequests = Arrays.stream(tripBooking.getHotelBookings())
+                .map(hotelBooking -> new HotelRequest(
+                        hotelBooking,
+                        HotelRequest.Action.BOOK))
+                .toArray(HotelRequest[]::new);
+
         return new BookingRequest(
                 tripBooking.getBookingId(),
                 tripBooking.getCustomerId(),
-                tripBooking.getStatus().toString(),
-                hotelBookingDtos);
+                tripBooking.getStatus().name(),
+                hotelRequests);
     }
-    
-    /**
-     * Generates a random trip booking with random hotel bookings.
-     * Ensures consecutive bookings are not for the same hotel.
-     *
-     * @return A random trip booking
-     */
+
+    private static void shutdownExecutor(ExecutorService ex, long timeout, TimeUnit unit) {
+        ex.shutdown();
+        try {
+            if (!ex.awaitTermination(timeout, unit)) ex.shutdownNow();
+        } catch (InterruptedException ie) {
+            ex.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public void start() {
+        if (running) return;
+        running = true;
+
+        client.connect();
+        client.listenForResponses(this::handleResponse);
+
+        scheduler.scheduleAtFixedRate(this::sendRandomBooking,
+                0, interval, TimeUnit.MILLISECONDS);
+
+        logger.info("BookingService#{} started", instanceId);
+    }
+
+    public void stop() {
+        if (!running) return;
+        running = false;
+        shutdownExecutor(scheduler, 5, TimeUnit.SECONDS);
+        logger.info("BookingService#{} stopped", instanceId);
+    }
+
+    private void sendRandomBooking() {
+        TripBooking trip = generateRandomTripBooking();
+        UUID bookingId = trip.getBookingId();
+
+        BookingRequest dto = toDto(trip);
+        String json = JsonUtil.toJson(dto);
+
+        pending.put(bookingId, new PendingRequest(trip));
+
+        boolean sent = client.sendRequest(json);
+        if (!sent) {
+            logger.error("BookingService#{} failed to dispatch {}", instanceId, bookingId);
+            pending.remove(bookingId);
+        } else {
+            logger.debug("BookingService#{} sent booking {}", instanceId, bookingId);
+        }
+    }
+
+    private void handleResponse(String json) {
+        try {
+            BookingResponse response = JsonUtil.fromJson(json, BookingResponse.class);
+            if (response == null || response.getBookingId() == null) {
+                logger.error("Malformed response {}", json);
+                return;
+            }
+
+            PendingRequest pendingRequest = pending.remove(response.getBookingId());
+            if (pendingRequest == null) {
+                logger.warn("Orphan response for {}", response.getBookingId());
+                return;
+            }
+
+            pendingRequest.complete(response.getStatus());
+            long rtt = pendingRequest.responseTime() - pendingRequest.requestTime();
+            logger.info("BookingService#{} finished {} status={} msg='{}' in {} ms",
+                    instanceId, response.getBookingId(), response.getStatus(),
+                    response.getMessage(), rtt);
+
+        } catch (Exception ex) {
+            logger.error("Cannot parse broker response {}", json, ex);
+        }
+    }
+
     private TripBooking generateRandomTripBooking() {
         UUID customerId = UUID.randomUUID();
-        
-        int numHotels = random.nextInt(5) + 1;
-        HotelBooking[] hotelBookings = new HotelBooking[numHotels];
-        
-        int timeBlock = random.nextInt(100) + 1;
-        
-        Hotel lastHotel = null;
-        
-        for (int i = 0; i < numHotels; i++) {
-            Hotel selectedHotel;
+        int segments = ThreadLocalRandom.current().nextInt(1, 6);
+        HotelBooking[] bookings = new HotelBooking[segments];
+
+        int timeBlock = ThreadLocalRandom.current().nextInt(1, MAX_TIME_BLOCK - segments + 1); // Ensure all segments lie within the max time block
+        Hotel prev = null;
+
+        for (int i = 0; i < segments; i++) {
+            Hotel h;
             do {
-                selectedHotel = availableHotels.get(random.nextInt(availableHotels.size()));
-            } while (lastHotel != null && selectedHotel.equals(lastHotel));
-            
-            lastHotel = selectedHotel;
-            
-            hotelBookings[i] = new HotelBooking(UUID.randomUUID(), selectedHotel.getId(), timeBlock);
-            
-            timeBlock = Math.min(timeBlock + 1, 100);
+                h = hotels.get(ThreadLocalRandom.current().nextInt(hotels.size()));
+            }
+            while (h.equals(prev));          // avoid consecutive identical hotels
+            prev = h;
+
+            bookings[i] = new HotelBooking(UUID.randomUUID(), h.getId(), timeBlock++);
         }
-        
-        return new TripBooking(hotelBookings, customerId);
+        return new TripBooking(bookings, customerId);
     }
-    
-    /**
-     * Class to track a pending booking request.
-     */
-    private static class PendingRequest {
-        private final TripBooking tripBooking;
-        private final long requestTime;
-        private long responseTime;
-        private String status;
-        
-        public PendingRequest(TripBooking tripBooking) {
-            this.tripBooking = tripBooking;
-            this.requestTime = System.currentTimeMillis();
-        }
-        
-        public TripBooking getTripBooking() {
-            return tripBooking;
-        }
-        
-        public long getRequestTime() {
-            return requestTime;
-        }
-        
-        public long getResponseTime() {
-            return responseTime;
-        }
-        
-        public void setResponseTime(long responseTime) {
-            this.responseTime = responseTime;
-        }
-        
-        public String getStatus() {
-            return status;
-        }
-        
-        public void setStatus(String status) {
-            this.status = status;
-        }
-    }
-    
+
     @Override
     public void close() {
         stop();
-        if (client != null) {
-            client.close();
+        client.close();
+    }
+
+    private record PendingRequest(TripBooking trip,
+                                  long requestTime,
+                                  String status,
+                                  long responseTime) {
+
+        PendingRequest(TripBooking trip) {
+            this(trip, System.currentTimeMillis(), null, 0);
+        }
+
+        PendingRequest complete(String newStatus) {
+            return new PendingRequest(trip, requestTime, newStatus, System.currentTimeMillis());
+        }
+
+        public long requestTime() {
+            return requestTime;
+        }
+
+        public long responseTime() {
+            return responseTime;
         }
     }
 }
