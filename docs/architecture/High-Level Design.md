@@ -119,14 +119,13 @@ erDiagram
         string id PK
         string tripId FK
         string hotelId FK
-        int timeBlock "0-99 (week number)"
+        int timeBlock "1-100 (week number)"
     }
 
     HOTEL {
         string hotelId PK
         string name
         int totalRooms "Fixed capacity"
-        string category
     }
 ```
 
@@ -205,7 +204,7 @@ direction LR
     TravelBroker "1" --> "1..*" BookingRequest : processes
 ```
 
-**Further classes and functions may be added as needed, because this design just drafts the core functionalities.** 
+Further classes and functions may be added as needed, because this design just drafts the core functionalities. 
 
 ### Design Decisions
 
@@ -242,98 +241,92 @@ direction LR
     
     - Decouples networking logic to promote scalability and testability.
 
-## Booking Sequence
+## ZeroMQ Sequence
 
-### Best Case
+### High‑level components
 
-```mermaid
-sequenceDiagram
-    participant BookingClient as Booking Service
-    participant TravelBroker as Travel Broker
-    participant Hotel1 as Hotel Server 1
-    participant Hotel2 as Hotel Server 2
+| Layer | Process / Component | Socket type | Role |
+| --- | --- | --- | --- |
+| **Client tier** | *n* × **BookingService** | `DEALER` → connect | Creates trip‑booking requests and receives booking confirmations |
+| **Middle tier** | **TravelBroker** (singleton) | `ROUTER` (front) & `ROUTER` (back) → bind | Orchestrates the booking workflow; routes messages between tiers; enforces SAGA/timeout logic |
+| **Worker tier** | *m* × **HotelServer** (1 per hotel) | `DEALER` → connect | Owns the inventory for a single hotel and executes book/cancel commands |
 
-    BookingClient->>TravelBroker: submitBooking(tripRequest)
-    activate TravelBroker
-
-    TravelBroker->>Hotel1: bookRoom(timeBlock)
-    TravelBroker->>Hotel2: bookRoom(timeBlock)
-    activate Hotel1
-    activate Hotel2
-
-    Hotel1-->>TravelBroker: SUCCESS (timeBlock booked)
-    Hotel2-->>TravelBroker: SUCCESS (timeBlock booked)
-    deactivate Hotel1
-    deactivate Hotel2
-
-    TravelBroker->>BookingClient: CONFIRMED
-    deactivate TravelBroker
-```
-
-### Worst Case
+### Non‑blocking message flow using Router-Dealer pattern
 
 ```mermaid
-sequenceDiagram
-    participant Client as Booking Service
-    participant Broker as Travel Broker
-    participant Hotel1 as Hotel Server 1
-    participant Hotel2 as Hotel Server 2
-    participant Hotel3 as Hotel Server 3
-    participant Log as Compensation Log
-
-    Client->>Broker: submitBooking(tripRequest)
-    activate Broker
-
-    Broker->>Hotel1: bookRoom(timeBlock)
-    Broker->>Hotel2: bookRoom(timeBlock)
-    Broker->>Hotel3: bookRoom(timeBlock)
-    activate Hotel1
-    activate Hotel2
-    activate Hotel3
-
-    Hotel1-->>Broker: SUCCESS
-    Hotel2-->>Broker: FAIL (No rooms)
-    deactivate Hotel2
-    Note over Hotel3: Timeout - No response because of crash or delay
-    deactivate Hotel3
-		
-		Broker->>Log: logCompensation(bookingId, Hotel1)
-    Broker->>Log: logCompensation(bookingId, Hotel3)
-    Broker->>Client: FAILED (Hotel2: No rooms, Hotel3: Timeout)
-    deactivate Broker
-
-    par Async Rollbacks via Compensation Log
-        # Hotel1: Confirmed booking, retry until success
-        loop Retry Hotel1 (exponential backoff)
-            Log->>Hotel1: cancelBooking(timeBlock)
-            activate Hotel1
-            Hotel1-->>Log: FAIL (Technical error)
-            deactivate Hotel1
-        end
-        Log->>Hotel1: cancelBooking(timeBlock)
-        activate Hotel1
-        Hotel1-->>Log: SUCCESS
-        deactivate Hotel1
-
-        # Hotel3: Ambiguous state, verify first
-        Log->>Hotel3: checkBookingStatus(timeBlock)
-        activate Hotel3
-        alt Hotel3 processed the booking
-            Hotel3-->>Log: CONFIRMED
-            Log->>Hotel3: cancelBooking(timeBlock)
-            Hotel3-->>Log: SUCCESS
-        else Hotel3 never processed it
-            Hotel3-->>Log: NOT_FOUND
-            Note over Log: No action needed
-        else Timeout again
-            Hotel3-->>Log: TIMEOUT
-            Note over Log: Retry check later
-        end
-        deactivate Hotel3
+flowchart LR
+    %% ── Clients ───────────────────────────────────────────────
+    subgraph Clients
+        BS1["BookingService&nbsp;1<br/>(DEALER)"]
+        BS2["BookingService&nbsp;2<br/>(DEALER)"]
+        BSN["…"]
     end
+
+    %% ── Broker ────────────────────────────────────────────────
+    subgraph Broker["TravelBroker"]
+        Front["ROUTER&nbsp;front-end"]
+        Back["ROUTER&nbsp;back-end"]
+        Pending["Booking<br/>pipeline"]
+        WorkerMap["hotelId&nbsp;⇄&nbsp;workerId"]
+
+        Front  -.-> | identity&nbsp;=&nbsp;clientId | Pending
+        Back   -.-> | identity&nbsp;=&nbsp;workerId | WorkerMap
+    end
+
+    %% ── Hotels ────────────────────────────────────────────────
+    subgraph Hotels
+        HS1["HotelServer&nbsp;H1<br/>(DEALER)"]
+        HS2["HotelServer&nbsp;H2<br/>(DEALER)"]
+        HSN["…"]
+    end
+
+    %% ── Connections ───────────────────────────────────────────
+    BS1 -- "tcp://*:5555" --> Front
+    BS2 -- "tcp://*:5555" --> Front
+    BSN -- "tcp://*:5555" --> Front
+
+    Back -- "tcp://*:5556" --> HS1
+    Back -- "tcp://*:5556" --> HS2
+    Back -- "tcp://*:5556" --> HSN
+
 ```
 
-[Exponential Backoff And Jitter | Amazon Web Services](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+- **Solid arrows** = TCP connections (encapsulated by ZeroMQ).
+- **Dashed arrows inside Broker** = internal hand‑off between the two ROUTER sockets and the broker’s processing logic.
+- Every message carries two ZeroMQ frames:
+    1. *Routing identity* (assigned automatically by ROUTER/DEALER) – lets the broker send the reply to the correct peer without knowing its TCP address.
+    2. *Payload* (JSON DTO).
+    
+
+| Requirement | Solution using Dealer-Router |
+| --- | --- |
+| **Full duplex, non‑blocking I/O** | A `DEALER` can send **and** receive at any time; a `ROUTER` can service multiple peers concurrently. No thread is ever forced to block on a send/receive turn‑taking like `REQ/REP`. |
+| **Scalability** | Adding more BookingServices or HotelServers requires **zero** configuration changes on the broker; they just connect to the existing ports. |
+| **Dynamic service discovery** | HotelServers self‑register with the message `"READY:<hotelId>"`. The broker keeps a runtime map `hotelId → workerId` instead of static host:port lists. |
+| **Failure isolation** | If a HotelServer crashes the TCP connection drops; the broker can detect the missing identity and mark the hotel as unavailable without affecting other workers. |
+- **Two unique TCP ports only** – 5555 for clients, 5556 for hotels. Keeping ports fixed simplifies firewalls and lets NAT‑ed servers dial out without incoming rules.
+- **Single TravelBroker instance** – centralises orchestration logic (timeouts, SAGA rollbacks).
+- **Registration handshake** – a plain text control frame avoids extra control sockets while giving the broker everything it needs to route.
+- **JSON DTOs over ZeroMQ frames** – human‑readable, language‑agnostic, and cheap to serialise with Gson.
+
+### Message Lifecycle
+
+1. **BookingService → Broker**
+    
+    `DEALER` prepends an empty delimiter → Broker’s front `ROUTER` receives `[clientId][payload]`.
+    
+2. **Broker dispatch → HotelServer**
+    
+    Broker looks up the target `hotelId`, finds `workerId`, and sends `[workerId][payload]` on the back‑end socket.
+    
+3. **HotelServer → Broker (reply)**
+    
+    After processing, the HotelServer’s `DEALER` sends `[payload]`; ROUTER re‑prepends `workerId` automatically.
+    
+4. **Broker → BookingService (final reply)**
+    
+    Broker replaces `workerId` with the original `clientId` and forwards `[clientId][payload]` out the front‑end.
+    
 
 ## Libraries
 
